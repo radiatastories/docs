@@ -128,6 +128,7 @@ before issuing the actual RPC:
 **Inferred:** this table is inferred based on standard documentation. If the IOP module is custom then the SIF RPC System Server IDs may differ from the standard PS2 SDK values.
 
 (sourced from ps2tek)
+
 | ID | Purpose | Module |
 |---|---|---|
 | `0x80000001` | File I/O | FILEIO |

@@ -177,7 +177,7 @@
   <a href="#s10">10. Worked example</a><br>
   <a href="#s11">11. Layout mathematics</a><br>
   <a href="#s12">12. Ruby / furigana</a><br>
-  <a href="#s13">13. Embedded VRAM glyphs</a><br>
+  <a href="#s13">13. Embedded glyph data</a><br>
   <a href="#s14">14. Regional differences</a><br>
   <a href="#s15">15. Open questions</a><br>
   <a href="#s16">16. Symbol reference</a>
@@ -260,10 +260,10 @@ packet offset table.
 <tbody>
 <tr><td class="mono">0x00</td><td class="mono">0x00</td><td class="mono">char[4]</td><td class="name">magic</td><td>Always <code>RMF1</code> (<code>52 4D 46 31</code>).</td></tr>
 <tr><td class="mono">0x04</td><td class="mono">0x04</td><td class="mono">u32</td><td class="name">version</td><td><code>0x000000CE</code> in every observed file, both regions. No code has been found that reads it. <span class="tag-i">inferred</span></td></tr>
-<tr><td class="mono">0x08</td><td class="mono">0x08</td><td class="mono">u32</td><td class="name">vram_payload_size</td><td>Size of the trailing dynamic glyph payload (&sect;13). Non-zero only in Japanese files; always <code>0</code> in English ones. <span class="tag-i">inferred</span></td></tr>
-<tr><td class="mono">0x0C</td><td class="mono">0x0C</td><td class="mono">u32</td><td class="name">packet_data_size</td><td>Byte offset one past the last packet, i.e. where the VRAM payload begins.</td></tr>
+<tr><td class="mono">0x08</td><td class="mono">0x08</td><td class="mono">u32</td><td class="name">glyph_data_size</td><td>Size of the embedded glyph tile block (&sect;13). Always a whole multiple of 512. Occurs in both regions; <code>0</code> when the file adds no glyphs of its own. <span class="tag-c">confirmed</span></td></tr>
+<tr><td class="mono">0x0C</td><td class="mono">0x0C</td><td class="mono">u32</td><td class="name">packet_data_size</td><td>Byte offset one past the last packet, which is also where the glyph tile block begins.</td></tr>
 <tr><td class="mono">0x10</td><td class="mono">0x10</td><td class="mono">u32</td><td class="name">packet_count</td><td>Number of entries in the offset table. <span class="tag-c">confirmed</span></td></tr>
-<tr><td class="mono">&mdash;</td><td class="mono">0x14</td><td class="mono">u32</td><td class="name">total_size</td><td><b>English only.</b> Total file size. Equal to <code>packet_data_size</code> in every English file seen, since none carries a payload.</td></tr>
+<tr><td class="mono">&mdash;</td><td class="mono">0x14</td><td class="mono">u32</td><td class="name">glyph_data_end</td><td><b>English only.</b> Exactly <code>packet_data_size + glyph_data_size</code>, i.e. one past the glyph tile block. That is where the glyph width table starts when there is one, and end-of-file when there is not &mdash; so it is <b>not</b> reliably the file size. <span class="tag-c">confirmed</span></td></tr>
 <tr><td class="mono">0x14</td><td class="mono">0x18</td><td class="mono">u32[n]</td><td class="name">packet_offsets</td><td>File-relative offset of each packet. <code>0xFFFFFFFF</code> means "packet absent". <span class="tag-c">confirmed</span></td></tr>
 </tbody>
 </table>
@@ -317,14 +317,16 @@ each build gives two payloads with <code>packet_count = 22</code>:
 <tr><td>JP</td><td class="mono">10332</td><td class="mono">9728</td><td class="mono">604</td><td class="mono">22</td><td class="mono">108</td><td class="mono">124</td><td><code>0x14 + 22*4 = 108</code> &check;</td></tr>
 <tr><td>eng</td><td class="mono">752</td><td class="mono">0</td><td class="mono">752</td><td class="mono">22</td><td class="mono">752</td><td class="mono">112</td><td><code>0x18 + 22*4 = 112</code> &check;</td></tr>
 <tr><td>debug</td><td class="mono">752</td><td class="mono">0</td><td class="mono">752</td><td class="mono">22</td><td class="mono">752</td><td class="mono">112</td><td><code>0x18 + 22*4 = 112</code> &check;</td></tr>
+<tr><td>eng (dialogue)</td><td class="mono">40364</td><td class="mono">34304</td><td class="mono">5992</td><td class="mono">38</td><td class="mono">40296</td><td class="mono">176</td><td><code>0x18 + 38*4 = 176</code> &check;</td></tr>
+<tr><td>jpn (dialogue)</td><td class="mono">6312</td><td class="mono">4608</td><td class="mono">1704</td><td class="mono">16</td><td class="mono">84</td><td class="mono">184</td><td><code>0x14 + 16*4 = 84</code> &check;</td></tr>
 </tbody>
 </table>
 
 <p>
-A Japanese dialogue file, 6312 bytes with 16 packets, closes the case independently:
-<code>[0x14] = 84 = 0x14 + 16*4</code> &check; while <code>[0x18] = 184</code> is not
-<code>0x18 + 16*4 = 88</code>; and <code>[0x08] + [0x0C] = 4608 + 1704 = 6312</code>, the file size
-again to the byte, with <code>4608 / 512 = 9</code> whole glyph tiles.
+The last two rows are full dialogue files rather than save-name blobs, and they are the ones that
+carry glyph data. Both still land on their region&rsquo;s table offset exactly, and the English one is
+the file that pins down <code>[0x14]</code>: <code>40296 = 5992 + 34304</code>, which is the sum and
+not the packet size.
 </p>
 
 <p>
@@ -333,6 +335,29 @@ is only true for the correct layout. The JP row also settles what <code>[0x08]</
 <code>9728 + 604 = 10332</code>, the file size to the byte, so <code>[0x08]</code> measures the
 trailing payload and <code>[0x0C]</code> marks where it starts (&sect;13).
 </p>
+
+<div class="box">
+<h4>How the trailing sections are located</h4>
+<p>
+A file is packets, then an optional block of glyph tiles, then an optional table of widths for those
+glyphs. Two header words locate the boundaries, and one English file carrying all three sections
+pins both of them down exactly <span class="tag-c">confirmed</span>:
+</p>
+<pre style="margin:.5rem 0"><code>[0x0C] = 5992    <span class="cm">; packets end / tiles begin</span>
+[0x08] = 34304   <span class="cm">; tile block size            34304 / 512 = 67 tiles</span>
+[0x14] = 40296   <span class="cm">; == 5992 + 34304, one past the tiles</span>
+size   = 40364   <span class="cm">; 68 bytes more: the width table (&sect;13)</span></code></pre>
+<p>
+This is the file that settles <code>[0x14]</code>. Everywhere else <code>[0x08]</code> is zero, which
+makes <code>packet_data_size</code> and <code>packet_data_size + glyph_data_size</code> the same
+number; here they differ by 34304 and the field tracks the sum, not the packet size.
+</p>
+<p>
+It also shows the field is not a file total, since 68 bytes of width table follow it. The Japanese
+header has no equivalent word at all &mdash; a Japanese reader computes the same boundary as
+<code>[0x0C] + [0x08]</code>.
+</p>
+</div>
 
 <!-- ══════════════════════════════════════════════════════════════ -->
 <h2 id="s3">3. Packet layout</h2>
@@ -511,7 +536,7 @@ matters if you are tracing the renderer. <span class="tag-c">confirmed</span>
 <tbody>
 <tr><td class="name">slot</td><td class="mono">b0 = 0x10&ndash;0xFF</td><td>240 usable slots per page. <code>b0 &lt; 0x10</code> is reserved for commands.</td></tr>
 <tr><td class="name">page</td><td class="mono">b1 &amp; 0x3F</td><td>64 pages &times; 240 slots = 15360 addressable glyphs.</td></tr>
-<tr><td class="name">attributes</td><td class="mono">b1 &amp; 0xC0</td><td>Two flag bits carried through to the renderer. <code>0x80</code> marks the dynamic VRAM glyph range (&sect;13); <code>0x40</code> appears only in Japanese-region text. <span class="tag-i">inferred</span></td></tr>
+<tr><td class="name">attributes</td><td class="mono">b1 &amp; 0xC0</td><td>Two flag bits carried through to the renderer. <code>0x80</code> selects the file&rsquo;s embedded glyph block instead of the resident font (&sect;13) <span class="tag-c">confirmed</span>; <code>0x40</code> occurs in both regions but its meaning is unknown (&sect;15).</td></tr>
 </tbody>
 </table>
 
@@ -959,12 +984,12 @@ option list.
 <p>
 A representative 32-packet file, 6164 bytes. This is an <b>English</b> file, so the offset table
 starts at <code>0x18</code>; on a Japanese file it would start at <code>0x14</code> and there would
-be no <code>total_size</code> word (&sect;2). Header:
+be no <code>glyph_data_end</code> word (&sect;2). Header:
 </p>
 
 <pre><code>00000000  <span class="hx">52 4D 46 31</span> <span class="hx">CE 00 00 00</span>  <span class="cm">magic "RMF1"     version 0xCE</span>
 00000008  <span class="hx">00 00 00 00</span> <span class="hx">14 18 00 00</span>  <span class="cm">reserved         packet_data_size 6164</span>
-00000010  <span class="hx">20 00 00 00</span> <span class="hx">14 18 00 00</span>  <span class="cm">packet_count 32  total_size 6164</span>
+00000010  <span class="hx">20 00 00 00</span> <span class="hx">14 18 00 00</span>  <span class="cm">packet_count 32  glyph_data_end 6164</span>
 00000018  <span class="hx">98 00 00 00</span> <span class="hx">08 01 00 00</span>  <span class="cm">packet[0] = 0x98   packet[1] = 0x108</span>
 00000020  <span class="hx">7C 01 00 00</span> <span class="hx">E4 01 00 00</span>  <span class="cm">packet[2]          packet[3]</span>
           &hellip;</code></pre>
@@ -1161,60 +1186,100 @@ Because the mask is a parameter, the same mechanism supports any scoped style ch
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════ -->
-<h2 id="s13">13. Embedded VRAM glyphs</h2>
+<h2 id="s13">13. Embedded glyph data</h2>
 
 <p>
-Any bytes past <code>packet_data_size</code> (header <code>+0x0C</code>) are a raw 4-bit-per-pixel
-texture payload holding glyphs that are not in the base font &mdash; rare kanji that would otherwise
-not fit in the resident font pages. In practice this is a <b>Japanese-only</b> feature: header
-<code>+0x08</code> gives the payload size and is <code>0</code> in every English file examined.
+A file may append glyphs of its own after its packets, for characters the resident font does not
+have. Two sections can follow the packet data, in this order:
 </p>
 
-<div class="box">
-<h4>A payload measured end to end</h4>
+<table>
+<thead><tr><th>Section</th><th>Starts at</th><th>Size</th><th>Contents</th></tr></thead>
+<tbody>
+<tr>
+  <td class="name">glyph tiles</td>
+  <td class="mono">packet_data_size</td>
+  <td class="mono">glyph_data_size</td>
+  <td>32&times;32 tiles at 4 bits per pixel, 512 bytes each, stacked in order. The size is always a whole multiple of 512.</td>
+</tr>
+<tr>
+  <td class="name">glyph widths</td>
+  <td class="mono">packet_data_size&nbsp;+&nbsp;glyph_data_size</td>
+  <td class="mono">tiles + 1</td>
+  <td>One advance-width byte per tile, then a <code>00</code> terminator. Present in the English file examined, absent from the Japanese ones. <span class="tag-i">inferred</span></td>
+</tr>
+</tbody>
+</table>
+
+<div class="box warn">
+<h4>This is not a Japanese-only feature</h4>
 <p>
-The embedded Japanese <code>SaveDataNameRmf</code> decompresses to 10332 bytes with
-<code>[0x0C] = 604</code> and <code>[0x08] = 9728</code>. Taking those 9728 bytes from offset 604
-consumes the file exactly, with nothing left over, and
-<code>9728 / 512 = 19</code> &mdash; nineteen whole 32&times;32 tiles at 4 bits per pixel. The nibble
-histogram of that region is strongly bimodal at <code>0</code> and <code>15</code> with populated
-mid-tones, which is what antialiased glyph coverage looks like and is not what packet data or
-padding looks like. <span class="tag-c">confirmed</span>
+An earlier reading of this document said it was, on the evidence that <code>glyph_data_size</code>
+was <code>0</code> in every English file then available. An English file carrying 67 embedded glyphs
+disproves that. Both regions use the mechanism; what differs is that the English file also carries a
+width table (&sect;14).
 </p>
 </div>
 
-<div class="box">
-<h4>&hellip; and the addressing confirmed against it</h4>
-<p>
-A Japanese dialogue file carries <code>[0x08] = 4608</code> from <code>[0x0C] = 1704</code>, again
-summing to the file size exactly and again a whole number of tiles &mdash;
-<code>4608 / 512 = 9</code>. Walking its token stream, every glyph word with the <code>0x80</code>
-attribute bit set falls in the range <code>0x8010</code>&ndash;<code>0x8017</code>: eight distinct
-words, contiguous from the base, for a nine-tile payload. That is the tile addressing below,
-observed rather than assumed. <span class="tag-c">confirmed</span>
-</p>
-</div>
+<h3>13.1 Tile addressing</h3>
 
-<p>Decoding the payload <span class="tag-i">inferred</span>:</p>
+<p>
+Tile <i>i</i> is addressed by the character word <code>0x8010 + i</code>. Reading that back through
+&sect;5: <code>b1 = 0x80</code> sets the attribute bit and leaves the page at <code>0</code>, and
+<code>b0 = 0x10 + i</code> is the slot. So the <code>0x80</code> attribute bit is what selects the
+file's own glyph block instead of the resident font.
+</p>
+
+<p>Both payload files agree, exactly and independently <span class="tag-c">confirmed</span>:</p>
+
+<table>
+<thead><tr><th>File</th><th class="mono">glyph_data_size</th><th>Tiles</th><th>Distinct <code>0x80</code> words</th><th>Range</th><th>Unreferenced</th></tr></thead>
+<tbody>
+<tr><td>English dialogue</td><td class="mono">34304</td><td class="mono">67</td><td class="mono">67</td><td class="mono">0x8010&ndash;0x8052</td><td class="mono">0</td></tr>
+<tr><td>Japanese dialogue</td><td class="mono">4608</td><td class="mono">9</td><td class="mono">8</td><td class="mono">0x8010&ndash;0x8017</td><td class="mono">1</td></tr>
+<tr><td>Japanese save names</td><td class="mono">9728</td><td class="mono">19</td><td class="mono">&mdash;</td><td class="mono">&mdash;</td><td class="mono">&mdash;</td></tr>
+</tbody>
+</table>
+
+<p>
+The English case is the strongest: 67 tiles, 67 distinct glyph words, contiguous from the base, none
+unreferenced and none pointing past the block.
+</p>
+
+<h3>13.2 Decoding the tiles</h3>
+
 <pre><code>p0     = byte &amp; 0x0F                  <span class="cm">; low nibble first</span>
 p1     = (byte &gt;&gt; 4) &amp; 0x0F
 pixel  = nibble * 17                  <span class="cm">; expand 4-bit to 8-bit grey</span>
 tiles  = reshape(pixels, (h, 32))     <span class="cm">; 32 x 32 tiles, stacked vertically</span></code></pre>
 
+<p class="note">
+The nibble histogram of a real block is strongly bimodal at <code>0</code> and <code>15</code> with
+populated mid-tones, which is what antialiased glyph coverage looks like and is not what packet data
+or padding looks like.
+</p>
+
+<h3>13.3 The width table</h3>
+
 <p>
-Tile <i>i</i> in the payload is addressed by the character word <code>0x8010 + i</code>. Reading that
-back through &sect;5: <code>b1 = 0x80</code> sets the attribute bit and leaves the page at 0, and
-<code>b0 = 0x10 + i</code> is the slot. So the <code>0x8000</code> attribute bit is what marks a glyph
-as coming from the dynamic payload rather than the resident font.
+In the English file, 68 bytes follow the tile block &mdash; one per tile, plus a trailing
+<code>00</code>. Every value lies between 27 and 30, and 58 of the 67 are exactly 30.
 </p>
 
 <p>
-The other attribute bit, <code>0x40</code>, appears only in Japanese text and only rarely &mdash; four
-glyph words in the dialogue file examined, against 153 ordinary ones and 8 dynamic ones. Its purpose
-is still unknown (&sect;15).
+Those are advance widths in the same units the resident font uses. The resident English spacing table
+runs 10&ndash;30, its single most common value is 30, and its next three are 29, 28 and 27 &mdash; the
+same top of the range, in the same order. The embedded glyphs are wide characters, so they cluster at
+the maximum. <span class="tag-i">inferred</span>
 </p>
 
-<!-- ══════════════════════════════════════════════════════════════ -->
+<p>
+That the Japanese files have no such table fits: their glyphs are full-width and uniform, so there is
+nothing per-glyph to record. It also explains why the Japanese header can omit
+<code>glyph_data_end</code> &mdash; with no section after the tiles, <code>[0x0C] + [0x08]</code> is
+simply end-of-file.
+</p>
+
 <h2 id="s14">14. Regional differences</h2>
 
 <p>
@@ -1230,14 +1295,20 @@ checked rather than assumed.
 <tr>
   <td class="name">Packet offset table</td>
   <td>Starts at <code>0x14</code>. Header is <code>0x14</code> bytes.</td>
-  <td>Starts at <code>0x18</code>. Header is <code>0x18</code> bytes, with an extra <code>total_size</code> <code>u32</code> at <code>0x14</code>.</td>
+  <td>Starts at <code>0x18</code>. Header is <code>0x18</code> bytes, with an extra <code>glyph_data_end</code> <code>u32</code> at <code>0x14</code>.</td>
   <td><span class="tag-c">confirmed</span></td>
 </tr>
 <tr>
   <td class="name">Header <code>+0x08</code></td>
-  <td>Size of the trailing VRAM glyph payload; non-zero in real files. <code>[0x08] + [0x0C]</code> is the exact file size.</td>
+  <td>Size of the embedded glyph tile block.</td>
   <td><code>0</code> in every file examined; no payload is ever carried.</td>
   <td><span class="tag-i">inferred</span></td>
+</tr>
+<tr>
+  <td class="name">How total size is expressed</td>
+  <td>Not stored. A reader adds <code>[0x0C] + [0x08]</code>.</td>
+  <td>Stored at <code>[0x14]</code>. The underlying identity <code>[0x0C] + [0x08] = size</code> is the same in both regions (&sect;2).</td>
+  <td><span class="tag-c">confirmed</span></td>
 </tr>
 <tr>
   <td class="name">Character code packing</td>
@@ -1282,10 +1353,10 @@ checked rather than assumed.
   <td><span class="tag-c">confirmed</span></td>
 </tr>
 <tr>
-  <td class="name">Dynamic glyph payload</td>
-  <td>Present and used; glyph words <code>0x8010+</code> index it. The <code>0x40</code> attribute bit also appears.</td>
-  <td>Absent &mdash; <code>[0x08]</code> is <code>0</code> and no <code>0x40</code> attribute bit occurs.</td>
-  <td><span class="tag-c">confirmed</span></td>
+  <td class="name">Glyph width table</td>
+  <td>Not present. <code>[0x0C] + [0x08]</code> lands exactly on end-of-file, so the tiles are the last section.</td>
+  <td>Present when the file embeds glyphs: one advance-width byte per tile plus a <code>00</code> terminator, after the tiles (&sect;13).</td>
+  <td><span class="tag-i">inferred</span></td>
 </tr>
 </tbody>
 </table>
@@ -1367,19 +1438,19 @@ contain. Per-build addresses are in &sect;16.
   <li><code>_CbBupDirection</code> and <code>_CbBupPosition</code> are byte-identical stubs in the
       debug build; whether the retail build differs has not been checked.</li>
   <li>The exact meaning of the three <code>05</code> text styles.</li>
-  <li>The <code>0x40</code> character attribute bit. It occurs only in Japanese text and only on a
-      handful of glyphs &mdash; four distinct words in the dialogue file examined &mdash; which is too
-      few to infer a purpose from context.</li>
+  <li>The <code>0x40</code> character attribute bit. It occurs in both regions and always sparsely
+      &mdash; 4 glyphs in the Japanese dialogue file, 22 in the English one &mdash; which is too few to
+      infer a purpose from context.</li>
   <li>Whether Japanese three-line messages follow the English quadratic for line Y and plate offset.
       The sample examined contains only one- and two-line messages, and its plate offset is constant
       where the English one varies, so the English formula cannot simply be carried over.</li>
   <li>Header <code>+0x04</code> (<code>0xCE</code>) is present in every file, both regions, but no
       code that reads it has been found.</li>
-  <li>Header <code>+0x08</code> is read as the VRAM payload size from file data alone; the engine
-      code path that consumes it has not been located, so the naming is inferred rather than proven.
-      Whether an English build would honour a non-zero value is untested.</li>
-  <li>Why the English header gained a <code>total_size</code> word at <code>0x14</code> when
-      <code>packet_data_size</code> already carries the same value in every English file.</li>
+  <li>The engine code path that consumes the glyph tile block and its width table has not been
+      located, so nothing is known about when the data is uploaded or how long it is kept.</li>
+  <li>Whether a Japanese file ever carries a glyph width table. None of the three examined does,
+      which fits full-width glyphs needing no per-glyph advance, but that is one sample of a
+      behaviour rather than a rule.</li>
 </ul>
 
 <!-- ══════════════════════════════════════════════════════════════ -->

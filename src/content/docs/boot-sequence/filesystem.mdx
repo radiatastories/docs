@@ -16,14 +16,14 @@ import Tag from '../../../components/Tag.astro';
 boot log, and used in a custom disk rebuild proof-of-concept. The `0x00078D83`
 constant is a hardcoded reference to the TOC address.
 
-### 7.2 Gate and disc read
+### 7.1 Gate and disc read
 
 ```asm
 if storage[+0xD99B] != 0:
     return SUCCESS
 
 sceCdDiskReady(0)
-CStorage::Open(storage, index=0)      ; -> SIF SearchFile
+CStorage::Open(storage, index=0)      ; -> SIF SearchFile [§4.3](../bring-up/#43-cstorageopen-and-sif-rpc-system-server-ids)
 buf = operator_new(0xD800)
 CStorage::Read(storage, buf, size=0xD800)
 ```
@@ -42,7 +42,7 @@ confirmed TOC size exactly once per-sector raw overhead is stripped. This
 confirms the TOC is fetched via a distinct, lower-level raw-read path rather than
 the standard `CDRead` API used for the ELF.
 
-### 7.3 Second gate and copy
+### 7.2 Second gate and copy
 
 ```asm
 if storage[+0xD99B] != 0:
@@ -50,7 +50,7 @@ if storage[+0xD99B] != 0:
 memcpy(storage + 0x194, buf, 0xD800)
 ```
 
-### 7.4 Descramble, in place
+### 7.3 Descramble, in place
 
 <Tag kind="confirmed" />:
 
@@ -72,10 +72,9 @@ def _scramble(self, flat_toc: list) -> list:
 | Parameter | Value | Confirmed by |
 |---|---|---|
 | `seed` | `0x13578642` | Exact match to disassembly constant |
-| `signature` | `0x27D51556` | Raw scrambled value expected at TOC index 0 |
 | `toc_offset` | `0x3C6C1800` | Matches sector 494979, confirmed in both regional boot logs. Derived, not hardcoded. |
 | `total_entries` | `0x1200` (4608) | Exact match to disassembly loop bound |
-| `sector_size` | `0x800` (2048) | Confirms the `<<11` conversion in [§7.5](#75-toc-entry-resolution) |
+| `sector_size` | `0x800` (2048) | Confirms the `<<11` conversion in [§7.4](#74-toc-entry-resolution) |
 
 Three parallel planes of 4608 32-bit words each:
 
@@ -85,7 +84,7 @@ Three parallel planes of 4608 32-bit words each:
 | 1 | `storage + 0x4994` | Sizes |
 | 2 | `storage + 0x9194` | IDs |
 
-### 7.5 TOC entry resolution
+### 7.4 TOC entry resolution
 
 <Tag kind="confirmed" /> — semaphore-guarded (`storage[+0x18]`). Both offset and
 size fields are packed as `[bits 31-24: reserved][bits 23-0: value]`.

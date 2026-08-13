@@ -1,0 +1,65 @@
+---
+title: Radiata Stories
+description: >-
+  A reverse-engineering reference for the PS2 game Radiata Stories — the boot
+  chain, the on-disc file table, the RMF text container and the EVD event
+  script, recovered from disassembly of the prototype, USA and Japanese builds.
+template: splash
+# Without this the tab reads "Radiata Stories | Radiata Stories", since the page
+# title and the site title are the same string.
+head:
+  - tag: title
+    content: Radiata Stories — reverse-engineering reference
+hero:
+  tagline: |
+    Reverse-engineering reference for the PlayStation&nbsp;2 game.
+    What the disc holds, how the engine boots it, and how the formats inside
+    are laid out — traced back to the instructions that read them.
+  actions:
+    - text: Start with the boot sequence
+      link: ./boot-sequence/disc-and-chain/
+      icon: right-arrow
+      variant: primary
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+<CardGrid>
+  <LinkCard
+    title="Boot sequence"
+    href="./boot-sequence/disc-and-chain/"
+    description="From the ISO9660 descriptor volume through the IOP kernel reboot, the two executions of main, and the scrambled 3-plane table of contents that resolves the filesystem."
+  />
+  <LinkCard
+    title="RMF — message format"
+    href="./rmf/container/"
+    description="The container behind every piece of displayable text: header, packets, the 16-bit token stream, both opcode spaces, layout mathematics and embedded glyph tiles. Six parts."
+  />
+  <LinkCard
+    title="EVD — event script"
+    href="./evd/format/"
+    description="The bytecode behind cutscenes, NPC behaviour and battle setup: container, instruction encoding, execution model, control flow, and a page for each of the 138 opcodes."
+  />
+  <LinkCard
+    title="Method and conventions"
+    href="./method/"
+    description="Which builds are covered, what confirmed and inferred mean here, and how addresses are cited."
+  />
+</CardGrid>
+
+## Builds covered
+
+Three executables are used throughout. Where they disagree, the difference is
+stated rather than averaged away.
+
+| Build | Identifier | Role |
+|---|---|---|
+| Debug (proto) | `SLUS-21262` | The prototype. Retains assertions, symbol names and debug overlays, so it is the primary source for structure. |
+| USA release | `SLUS-21262` | Retail. Same `main` ELF as the Japanese release. |
+| Japanese release | `SLPM-65800` | Retail. Differs from the English builds in the RMF header and in several text metrics. |
+
+All three share identical IOP kernel images and identical custom ELFs; the `main`
+ELF differs only between the prototype and the releases.
+
+{/* No outbound links yet. When there are repos, a community or tools to point
+    at, add them to `social` in astro.config.ts and as a card above. */}

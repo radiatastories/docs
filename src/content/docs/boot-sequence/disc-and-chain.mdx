@@ -1,0 +1,86 @@
+---
+title: Disc layout and boot chain
+description: >-
+  What the disc holds and in what order, where the ISO9660 root directory puts
+  main, and why main executes twice across two separate EE resets.
+sidebar:
+  label: 1–3 · Disc and boot chain
+  order: 1
+---
+
+import Tag from '../../../components/Tag.astro';
+
+These pages consolidate everything established about the game's boot chain.
+Facts are marked <Tag kind="confirmed" /> (verified against disassembly, working
+reference code, or an actual boot log) or <Tag kind="inferred" /> (strongly
+implied, not independently verified).
+
+Two independent boot logs — USA (proto) `SLUS-21262` and Japan `SLPM-65800`,
+captured via PCSX2 — are used throughout as ground truth alongside the static
+disassembly of USA (proto) `SLUS-21262`. Manual verification on dumped ISO level
+files was also used to confirm the boot sequence.
+
+- Analysis of both **release** versions reveals identical `main` ELFs.
+- The `main` ELF differs between proto and release builds.
+- All versions' IOP kernel images are identical.
+- All versions' custom ELFs are identical.
+
+## 1. Disc layout
+
+<Tag kind="confirmed" /> — cross-validated across all builds and the USA-proto /
+Japan boot logs:
+
+| Region | Extent | Contents |
+|---|---|---|
+| ISO9660 root-directory files | Start of disc → end of IOP kernel | `system.cnf`, `main` ELF, `IOPRP300.IMG` kernel v2.2, and dev modules |
+| Padding | End of IOP kernel → start of the custom IOP ELFs | ~900 MB |
+| Custom ELFs | `0x10000` bytes, immediately before the TOC | An unknown custom packed EE ELF section ([§6.2](../kernel-image/#62-custom-elfs)) |
+| File table (TOC) | `0xD800` bytes, resolved to sector 494979 in both regions | Scrambled 3-plane TOC ([§7](../filesystem/#7-makefilesystem-toc-address-derivation-read-and-descramble)) |
+| Filesystem | End of file table → end of disc | Remaining game data, including game-specific IOP modules, resolved via the TOC |
+
+`main`'s sector varies by region (USA-proto: 274, Japan: 270), and so does its
+size (`0x8D900` vs `0x7E300`) and the disc's total sector count (2,242,608 vs
+2,239,296) — yet **the TOC resolves to the identical absolute sector (494979) in
+all builds.**
+
+## 2. ISO9660 root directory placement
+
+<Tag kind="confirmed" /> — the root directory entries are in this order: `.`,
+`..`, `dev9`, `IOPRP300.IMG` (kernel image), the remaining dev modules,
+`system.cnf`, and `main`. `main` is always the **last entry** in the ISO9660
+root directory, but it is not the last physical entry; the last physical entry
+is the kernel image.
+
+## 3. Boot chain: two executions of main
+
+<Tag kind="confirmed" />. Read the descriptor volume (LBA 16) for the LBA and
+size of the root directory. Read the root directory and locate `system.cnf`.
+Read `system.cnf` and locate `main`. `main` (entry point `0x00100008` in all
+builds) executes **twice**, across two separate EE resets:
+
+```asm
+Simplified hard-reset boot
+  -> IOP Kernel 0.9.1 (BIOS default) loads
+  -> main ELF loads and executes (1st time)
+       -> triggers sceSifRebootIop (loads the custom kernel image)
+       -> triggers an EE-side reboot request
+  -> "Update rebooting.." / EE/iR5900 Recompiler Reset
+  -> main ELF loads and executes AGAIN (2nd time, same entry point)
+       -> now running under the custom IOP Kernel 2.2
+       -> proceeds into CBios / MakeFileSystem / sound / TOC read
+```
+
+The single `main` symbol seen in static disassembly corresponds to two logical
+phases sharing one entry point — an early phase whose job is to kick off the IOP
+kernel reboot, and a later phase (after that reboot completes) that performs the
+actual game bring-up starting with the filesystem.
+
+**Not yet isolated:** the exact branch or flag distinguishing "first pass, about
+to reboot IOP" from "second pass, IOP kernel already upgraded." The flag byte at
+`storage+0xD99B` ([§4.5](../bring-up/#45-conditional-gate-the-shared-flag-byte))
+is a candidate worth re-examining specifically for this, since a storage struct
+freshly constructed after an EE reset would plausibly read differently than one
+still holding pre-reboot state.
+
+<Tag kind="confirmed" /> — all builds of the game share the exact same custom
+kernel image content.

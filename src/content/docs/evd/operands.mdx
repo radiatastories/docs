@@ -1,0 +1,185 @@
+---
+title: Operands and state
+description: >-
+  How an EVD command names a character, and the three stores of state a script
+  can address — config flags, event values, and character properties.
+sidebar:
+  label: 5–7 · Operands and state
+  order: 2
+---
+
+import Tag from '../../../components/Tag.astro';
+
+## 6. The argument byte
+
+Bits 16–23 of the command header are handed to the handler as a bitfield. There
+is no format-wide meaning; each handler defines its own. Two patterns recur
+often enough to be worth stating.
+
+### 6.1 Bit 0 as a "character follows" gate
+
+On the large family of character commands, argument bit `0` selects where the
+character comes from:
+
+- **set** — the next operand word is a character selector.
+- **clear** — no selector word is present; the handler uses the script's default
+  character from `SCR_DATA+0x10`/`+0x12`.
+
+It is a presence flag, not an option: it says whether an operand exists. Getting
+it wrong desynchronises every following command in the file, which is why it is
+one of the first things a decoder has to get right.
+
+### 6.2 Low bits as payload gates
+
+Several handlers use the low argument bits to say which optional operands
+follow, in a fixed order. `Command_1c` is a compact example: bit `0` gates a
+context value, bit `1` a stand-position id, and bits `2` and `3` position and
+posture vectors.
+
+### 6.3 Operands masked before the engine sees them
+
+Some argument bits are read in the delay slot of a branch, meaning they take
+effect regardless of which way the branch goes. `Command_06`, `Command_40` and
+`Command_72` all mask their operand this way, discarding the high half before
+the engine ever sees it <Tag kind="confirmed" />. A decoder must preserve those
+high bits to round-trip, but they cannot change behaviour.
+
+## 7. Character operands
+
+A character operand is a 32-bit selector word:
+
+```asm
+ 31          24 23          16 15                           0
++--------------+--------------+------------------------------+
+| (unused)     | variant      | character id                 |
++--------------+--------------+------------------------------+
+```
+
+The low 16 bits are the id. Byte 2 is a secondary class/variant input passed
+alongside the id. Values below `0x26AC` are literal character ids, and `0` means
+"the script's default character".
+
+### 7.1 Abstraction codes
+
+Values from `0x26AC` up are **abstraction codes** resolved at run time, and must
+not be looked up in a character table. Two functions do the resolving:
+`GetAbstractionCharacterNumber` at `0x002C0BA0` (a 12-entry jump table at
+`0x3A1160` covering `0x26AC`–`0x26B7`) and
+`CRadiScript::GetAbstractionCharacterNumber` at `0x002E5470` (a 22-entry table
+at `0x3A38B0` covering `0x26DE`–`0x26F3`, delegating anything lower to the
+first).
+
+| Codes | Resolves to |
+|---|---|
+| `0x26AC` | The current / controlling character (global halfword at `+0x830`) |
+| `0x26AD`–`0x26B1` | Party slots 1–5 (halfwords at `+0x834 + 4N`) |
+| `0x26B2`–`0x26B7` | Scans over the party slots. Rarely used; meanings not established. |
+| `0x26DE`–`0x26E0` | An equipment-based lookup via `CCharaEquipmentManager::GetEquipedCharacterCls` |
+| `0x26E1`–`0x26EA` | **The character held in event value 1000+N** |
+| `0x26EB`–`0x26F1` | Jump to `SetError`; reserved / unimplemented |
+| `0x26F2`–`0x26F3` | The default character, resolved through the global table |
+
+Usage counts across the sampled corpus show how lopsided this is in practice:
+
+| Code | Uses | Meaning |
+|---|---:|---|
+| `0x26AC` | 25,989 | current active / controlling character |
+| `0x26AD` | 519 | party slot 1 |
+| `0x26AE` | 730 | party slot 2 |
+| `0x26AF` | 730 | party slot 3 |
+| `0x26B0` | 730 | party slot 4 |
+| `0x26B1` | 178 | party slot 5 |
+
+The slot run is five wide, ending at `0x26B1`. Slots 2–4 share an identical
+count, which is what a uniform slot series looks like; slot 1 and slot 5 differ
+because the first is normally the player and the last is often unfilled.
+
+### 7.2 The `0x26E1` block
+
+This block is worth understanding because it is heavily used. The handler reads
+`SCR_DATA + 0x34 + 4N`, and `SetEventValueForScript` maps event value ids
+`0x3E8`–`0x3F1` (1000–1009) onto exactly those words. So the code means
+"whichever character that event value currently holds".
+
+`0x26EA` — event value 1009 — is the second most common character operand in the
+entire game, behind only "current character": scripts stash a character in value
+1009 and then act on it.
+
+## 8. Values and flags
+
+Three distinct stores of state are addressable from a script.
+
+### 8.1 Config / event flags
+
+A large array of boolean flags read and written through
+`CRadiApp::GetConfigEventFlag` and `SetConfigEventFlag`. Ids run to at least
+8191. Commands can operate on a **run of consecutive flags**, treating them as
+the bits of a small integer, LSB first — so a single operand can carry a small
+number spread across several flag ids.
+
+### 8.2 Event values
+
+32-bit script variables. Ids `1000`–`1009` are **script-local**, stored in the
+running script's own `SCR_DATA` block at `+0x34 + 4N`
+(`SetEventValueForScript`, `0x002E4E40`); everything else indexes a global
+array.
+
+This is why 1000–1009 appear constantly — they are scratch registers, and a
+sibling script does not see them.
+
+### 8.3 Character properties
+
+Reached through per-domain dispatch tables of property accessor functions,
+recovered by emulating the static initialisers <Tag kind="confirmed" />:
+
+| Table | Address | Entries | Symbols |
+|---|---|---:|---|
+| `CRadiApp::pfnParamTbl` | `0x003B0E30` | 14 | `SystemParaCode_000..013` |
+| `CCharacterManager::pfnParamTbl` | `0x003B0FE0` | 75 | `CharaParaCode_000..074` |
+| `CItemManager::pfnParamTbl` | `0x0035BC80` | — | not yet recovered |
+
+They cover HP, EXP, money, status and so on. Character entries 4, 5 and 73 all
+point at the same stub (`0x002A0FD0`), so those property codes are unused —
+which is a useful validity check on any decoded operand.
+
+### 8.4 Property `0x1D`: storage the game never reads
+
+One property is worth calling out because it is not engine state at all.
+
+Property `0x1D` dispatches to `CCharacterManager::CharaParaCode_029`
+(`0x0029EED0`), which reads and writes one byte at `+0x82` of the character's
+person record (the sub-object at character `+0x0C`).
+
+Scanning every byte, halfword and word access across `Main.elf`, `step0_00`,
+`step1_02` and `step2_00` finds **no other reader of that byte**. The only other
+reference in the whole binary is `CCharacterPerson::ReleaseScheduleList`
+(`0x002B3760`) zeroing it — together with the neighbouring `+0x74`, `+0x76`,
+`+0x78`, `+0x7C` and `+0x80` — when a character's schedule list is released. The
+engine never acts on its value; it only wipes it.
+
+The corpus shows scripts using it as per-character flags, and using it heavily:
+
+| Operation | Uses |
+|---|---:|
+| Set the flag | 2,769 |
+| Clear it | 795 |
+| Read it into an event value to test | 114 |
+
+That is the whole lifecycle, written and read entirely by event scripts. It is
+general-purpose per-character storage rather than a piece of engine state with a
+hidden meaning. Neighbouring bytes `+0x7C` and `+0x80` have their own property
+codes and the same shape, but no script in the corpus uses them.
+
+## 9. Symbol coverage
+
+Id-to-name tables covering 1,859 names exist across the character, item,
+location, BGM, skill, event and flag domains. Ids remain authoritative — a name
+is a convenience, not part of the format.
+
+Spot checks against ids taken from the corpus: character `0x0001` Jack, `0x0042`
+Miranda, `0x00D3` Monki; BGM `0x0037` Gratifying Guest; location `0x001F`
+Dawnbay Diner and `0x00A0` Radiata Castle Exterior.
+
+Coverage is uneven. Flags are sparse by nature — **175 of 8,191** carry a
+description — and the event table is incomplete. Item coverage is good at 671
+entries, including per-category ids such as `0x0153`.

@@ -1,0 +1,104 @@
+---
+title: Kernel image and custom ELFs
+description: >-
+  The custom IOP kernel image and its ROMDIR structure, plus the packed EE ELF
+  section that sits before the table of contents.
+sidebar:
+  label: 6 · Kernel image and ELFs
+  order: 4
+---
+
+import Tag from '../../../components/Tag.astro';
+
+## 6. Custom kernel image and ELFs
+
+<Tag kind="confirmed" />. The kernel image (loaded during the first pass,
+[§4.2](../bring-up/#42-core-sdk-bring-up); located immediately after `main` on
+disc) uses the **standard PS2 BIOS ROM directory format** and prints `IOP
+Realtime Kernel Ver. 2.2`. This is where the core IOP modules live.
+
+<Tag kind="inferred" /> — "Ver. 2.2" is suggestive of kernel version 2.2 but not
+necessarily the actual version.
+
+**To verify:** versions and collections against contained modules; modules
+against known hashes.
+
+### 6.1 ROMDIR entry structure
+
+```c
+struct RomdirEntry {
+    char     name[10];       // null-padded
+    uint16_t extinfo_size;
+    uint32_t size;
+};
+```
+
+Confirmed sample (start of the image):
+
+| Name | `extinfo_size` | `size` |
+|---|---|---|
+| `RESET` | `0x0008` | `0x00000000` |
+| `ROMDIR` | `0x0048` | `0x00000140` (self-describing directory table size) |
+| `EXTINFO` | `0x0000` | `0x00000258` |
+| `SYSMEM` | `0x0028` | `0x00001799` |
+
+`RESET`, `ROMDIR` and `EXTINFO` are always the first three entries in a standard
+PS2 ROM image; real modules follow. Expect `LOADFILE` and the other modules from
+the System Server ID table
+([§4.3](../bring-up/#43-cstorageopen-and-sif-rpc-system-server-ids)) as further
+entries in the same directory, addressed by name.
+
+### 6.2 Custom ELFs
+
+<Tag kind="confirmed" /> — the game does not need this section to run. The ELF
+loads 17 segments, the same as the `main` ELF.
+
+<Tag kind="inferred" /> — built using the same toolchain as the `main` ELF. Based
+on the unusual addressing of the custom ELF it seems likely to be a developer
+bootloader, in some such structure:
+
+```asm
+PS2 boot
+   |
+   +-- IOP modules
+   |      |
+   |      +-- DEV9.IRX
+   |      +-- ATAD.IRX
+   |
+   +-- EE dev ELF @ 0x130000
+          |
+          +-- host communication
+          +-- debug tools
+          +-- game loader/runtime
+```
+
+This section is very heavily inferred. On top of that, no `DvdRead` or `CDRead`
+could be obtained at these sectors, further mystifying the actual module contents
+and purpose — meaning that if this section is loaded, it would have to be later
+into runtime or through a different mechanism. There also seems to be something
+going on with ELF markers as terminal markers, so even the structures themselves
+are not yet fully understood.
+
+#### 6.2.1 Entrypoint plain ELF
+
+Standard, unmodified ELF — 17-segment structure identical in shape to `main`'s
+own ([§5](../segment-map/#5-elf-program-header-and-segment-memory-map)),
+`e_entry = vaddr + 8`, same "only entry 0 has real content" sharing pattern.
+`e_flags` differs from `main` (`0x33924000` vs `0x20924000`) — not yet confirmed
+what this distinguishes. Several segments show `vaddr != paddr`, with `paddr` in
+the `0x30000000` range.
+
+#### 6.2.2 Ciphered or compressed entry
+
+<Tag kind="confirmed" /> — `b'\00\ELF'`, followed by a 32-byte header. Can be
+followed by a medium-to-high entropy payload.
+
+<Tag kind="inferred" /> — the medium-to-high entropy payload is likely
+compressed.
+
+#### 6.2.3 "Custom" entry (duplicate-with-prefix)
+
+<Tag kind="confirmed" /> — `b'\7E\ELF\7F\ELF'` or `b'\00\ELF\7F\ELF'`.
+
+<Tag kind="inferred" /> — a standard ELF despite the differing header. The first
+ELF marker may be a terminal marker.

@@ -1,0 +1,344 @@
+---
+title: EVD container and encoding
+description: >-
+  The EVD event-script container, the 32-bit instruction encoding, the
+  execution model, and a complete worked example decoded byte by byte.
+sidebar:
+  label: 1–4 · Container and encoding
+  order: 1
+---
+
+import Tag from '../../../components/Tag.astro';
+
+`EVD` is the bytecode format that drives cutscenes, NPC behaviour and battle
+setup. These pages describe the container, the instruction encoding, the
+execution model and the operand conventions. They are a format reference.
+
+## 1. Provenance
+
+Two independent lines of evidence were used, and they agree.
+
+**Static analysis of the game code.** The debug build ships a linker `.MAP` with
+C++ symbol names, so handlers can be located by name
+(`CRadiScript::Command_1b`) rather than guessed at. Every behavioural claim
+cites the function it came from. Addresses are virtual addresses in the debug
+build; the bulk of the script engine lives in the `step0_00` overlay, based at
+`0x001B4280`.
+
+**Exhaustive round-tripping.** Every EVD the game ships — **7,462 files**,
+covering the loose event files, the packed archives and the per-character
+animation archives — has been decoded to a textual representation and
+reassembled, and the result must equal the original bytes. It does, for all
+7,462, through three independent representations. 7,321 of those files are
+distinct by content; the rest are duplicates across archives.
+
+That is the strongest claim here and the one everything else rests on:
+**the container and instruction encoding are not inferred, they are proven.**
+Any error in them would surface as a byte mismatch.
+
+Field *meanings* are weaker and are marked as such. Where a trace establishes
+where a value is written but not what consumes it, this document says so rather
+than inventing a purpose. [What is not established](#12-what-is-not-established)
+lists the gaps.
+
+## 2. Container layout
+
+An EVD file is a flat little-endian structure. All multi-byte values are
+little-endian, and **all offsets stored in the file are word offsets** —
+multiply by 4 for a byte offset.
+
+```asm
++0x00   4 bytes   magic "EVD\x01"  (45 56 44 01)
++0x04   u32       header flags
++0x08   u32       marker table offset, in words; 0 = no marker table
++0x0C   ...       command region, runs to end of file
+```
+
+The command region begins immediately at `+0x0C` and is a straight sequence of
+commands. There is no separate code/data split and no length field: execution
+starts at `+0x0C` and proceeds until a command stops it.
+
+### 2.1 Header flags
+
+A small field at `+0x04`. Observed values across all 7,462 parsed files:
+
+| Value | Files |
+|---:|---:|
+| `3` | 2,719 |
+| `0` | 2,693 |
+| `7` | 1,022 |
+| `1` | 745 |
+| `6` | 201 |
+| `2` | 80 |
+
+Three bits are in use. **What they select has not been established** — no reader
+of this word has been located. `SetScriptNumber` reads it as a byte and branches
+on the values `1`, `2` and `3`:
+
+```asm
+lbu   v0, 0x04(evd_base)
+...
+beq   value, 3, case_3
+beq   value, 2, case_2
+beq   value, 1, case_1
+```
+
+### 2.2 Marker table
+
+If the word at `+0x08` is non-zero it is a word offset to a marker table:
+
+```asm
++0x00   u16       entry count
++0x04   u32[n]    word offset of each marker, relative to the file start
+```
+
+`CRadiScript::GetMarkerAddress(const EVDFILE_HEAD*, int)` at `0x002E57D0`
+bounds-checks the index against the count and returns `file + entry * 4`
+<Tag kind="confirmed" />:
+
+```asm
+lw    v0, 0x08(a1)       ; word offset to marker table, 0 means no table
+beqz  v0, return_null
+sll   v0, v0, 2
+addu  v1, a1, v0         ; marker_table = evd_base + header[0x08] * 4
+lhu   v0, 0x00(v1)       ; marker count
+sltu  v0, marker_index, v0
+...
+addiu v0, marker_index, 1
+sll   v0, v0, 2
+addu  v1, v1, v0
+lw    v0, 0x00(v1)       ; marker target word offset
+sll   v0, v0, 2
+addu  v0, a1, v0         ; return evd_base + target * 4
+```
+
+All 2,797 files with a non-zero table parse cleanly under this layout.
+
+## 3. Instruction encoding
+
+Every command begins with one 32-bit header word:
+
+```asm
+ 31            24 23            16 15             8 7              0
++----------------+----------------+----------------+----------------+
+|  flags         |  argument byte |  extra words   |  opcode        |
++----------------+----------------+----------------+----------------+
+```
+
+| Field | Bits | Meaning |
+|---|---|---|
+| opcode | 0–7 | Which handler runs |
+| extra words | 8–15 | Count of 32-bit operand words following the header |
+| argument byte | 16–23 | Passed to the handler; almost always a bitfield of options |
+| flags | 24–31 | Header flags; bit 7 (`0x80`) is the keep-going bit |
+
+A command therefore occupies `4 + extra_words * 4` bytes.
+
+`CRadiScript::StepProcess(SCR_DATA*, int)` reads exactly this
+<Tag kind="confirmed" />:
+
+```asm
+lw    a3, 0x0c(scr)
+addiu v1, a3, 4
+sw    v1, 0x0c(scr)      ; cursor advances past command header first
+lw    s2, 0x00(a3)       ; command word
+srl   v1, s2, 8
+andi  s1, s2, 0xff       ; opcode
+andi  s0, v1, 0xff       ; extra word count
+srl   v1, s2, 0x10
+andi  a3, v1, 0xff       ; third command byte
+```
+
+and dispatches through `CRadiScript::pfnTable`, a table of 12-byte entries at
+`0x003B2D70`:
+
+```asm
+lui   v0, 0x003b
+addiu v0, v0, 0x2d70     ; pfnTable
+sll   v1, opcode, 1
+addu  v1, v1, opcode
+sll   v1, v1, 2          ; opcode * 12
+addu  t9, v0, v1
+jal   0x00149400         ; C++ member-function pointer call helper
+```
+
+The handler call shape is:
+
+```asm
+handler(this, step_process_arg, scr_data, argument_byte, extra_word_count)
+```
+
+### 3.1 Handler return values
+
+After the handler returns, `StepProcess` acts on the result:
+
+| Return | Effect |
+|---|---|
+| `1` | Stop processing this script for now. |
+| `2` | Set bit 31 on the command word and continue — a branch was taken. |
+| `<= 0` | For opcodes below `0xF0`, advance `SCR_DATA+0x0C` by `extra_word_count * 4`. |
+
+Individual handlers can still override or modify cursor behaviour, so command
+body decoding must be verified per opcode.
+
+### 3.2 The keep-going bit
+
+The loop condition proves what the ubiquitous `0x80` flag byte does
+<Tag kind="confirmed" />:
+
+```asm
+002E3498  lui   v0, 0x8000
+002E349C  and   v0, s2, v0      ; bit 31 of the just-executed command word
+002E34A0  bnez  v0, 0x2e33e0    ; set: execute the next command immediately
+002E34A4  move  v0, zero        ; clear: return, resume next game update
+```
+
+Bit 31 — bit 7 of the flags byte — is the **keep-going bit**:
+
+- **set** — run the next command immediately. This is the common case.
+- **clear** — stop after this command and resume on the next game update, i.e.
+  a one-frame yield.
+
+This is why nearly every shipped command carries `0x80`, and why a taken branch
+(handler return `2`) forces the bit on: execution must continue at the jump
+target. Other bits of the flags byte are rare and no general meaning has been
+established.
+
+### 3.3 The `0xF0` exception
+
+For **opcodes `>= 0xF0` the extra-word count is ignored** and the command is
+exactly 4 bytes. The stepper consumes only the header. This is what lets those
+opcodes act as in-stream markers whose remaining bits carry data rather than
+pointing at operands — see [`0xF0` markers](../control-flow/#4-0xf0-markers).
+
+It is also why `Command_ff` consumes only its header despite a raw word of
+`0xFFFFFFFF` appearing after it in some files.
+
+## 4. Execution model
+
+A script runs in a **script slot**. `CRadiScript::SetScriptNumber` bounds slots
+to 48 (`slti $at, $s4, 0x30`), and `GetEmptySlot` allocates one when the caller
+passes a negative index.
+
+Each running script has a state block, referred to here as `SCR_DATA`. The
+fields established are:
+
+| Offset | Contents |
+|---|---|
+| `+0x08` | The EVD base pointer |
+| `+0x0C` | The script cursor — a pointer into the command region. Branches write it. |
+| `+0x10` | Default character id |
+| `+0x12` | Default character variant |
+| `+0x34` … `+0x58` | Ten script-local event values, ids 1000–1009 |
+| `+0x60`, `+0x70` | Float and angle slots written by the expression command |
+| `+0x80` | Eight trigger slots |
+
+For the common raw files, `SetScriptNumber` initialises the slot like this,
+which is what puts the first command word at `EVD+0x0C` <Tag kind="confirmed" />:
+
+```asm
+addiu v0, evd_base, 0x0c
+sw    evd_base, 0x08(scr_data)
+sw    v0,       0x0c(scr_data)
+```
+
+Commands that transfer control — jumps, conditional branches, marker seeks —
+work by writing `SCR_DATA+0x0C` and returning a status that tells the stepper
+not to advance normally.
+
+### 4.1 Two id spaces
+
+Two different id spaces are involved, and conflating them is the single easiest
+mistake to make with this format:
+
+- **`Command_06`** calls `CRadiScript::LoadScriptFile`. Its operand is a
+  **global event file id**.
+- **`Command_04`** and the stacked-start variant call
+  `CRadiScript::SetScriptNumber`. Their operand is a **script number inside the
+  file that is already loaded**.
+
+So in event file 516, a start with operand `5` runs script `516_05`, not event
+file 5. The corpus is consistent with this: stacked starts only ever use values
+`1..24`, the range of script numbers a single file holds.
+
+When a marker argument is used in `SetScriptNumber`, it calls
+`GetMarkerAddress(evd_base, marker_index)`. If a target is found the returned
+marker command is inspected; if accepted, the cursor becomes `marker + 4`, and
+if not, the cursor can fall back to the original script pointer.
+
+## 5. Worked example
+
+`810_10.evd`, 120 bytes, complete:
+
+```asm
+0000  45 56 44 01 03 00 00 00 00 00 00 00 10 01 00 80
+0010  00 00 01 00 10 01 01 80 84 12 00 00 8A 00 01 80
+0020  23 03 01 00 AC 26 00 00 00 00 00 00 01 00 00 00
+0030  03 01 00 00 02 00 18 00 89 01 04 80 00 00 00 00
+0040  03 01 00 00 04 00 00 00 34 03 01 80 AC 26 00 00
+0050  00 07 16 00 FF FF 00 00 2F 03 01 80 AC 26 00 00
+0060  FF F1 FF FF FF F1 FF FF 8A 00 00 80 10 01 00 80
+0070  00 00 00 00 00 00 00 00
+```
+
+Header: magic, flags `3`, no marker table. Execution starts at `+0x0C`.
+
+The first command word is `80 00 01 10` little-endian = `0x80000110`:
+
+- opcode `0x10` — set config/event flags
+- extra words `0x01` — one operand follows
+- argument byte `0x00`
+- flags `0x80` — keep-going set
+
+Its operand at `+0x10` is `0x00010000`: flag id `0` in the low half, value in
+the high half. So: *set flag 0 on.*
+
+The next word `0x80010110` is the same opcode with argument `0x01` and operand
+`0x00001284` — a run of two flags starting at 4740, cleared.
+
+Decoded in full:
+
+```asm
+set flag 0 on
+clear flags 4740..4741
+set window mode (argument 0x01)
+play animation 1, group 0, on the current character (0x26AC)   ; yields
+wait for trigger type 0x02, flags 0x0018                       ; yields
+start dialogue line 0x0000
+wait for trigger type 0x04                                     ; yields
+set expression on the current character
+set attributes on the current character
+set window mode (argument 0x00)
+clear flag 0
+end script                                                     ; yields
+```
+
+Every byte of the file is accounted for.
+
+## 12. What is not established
+
+Stated plainly, because a format document that hides its gaps causes downstream
+errors.
+
+- **Header flags at `+0x04`.** Three bits in use, no reader located.
+- **About 15,000 operand fields — roughly 1.1% of decoded lines** — are
+  preserved and round-trip correctly but have no established meaning. The
+  largest groups:
+  - `Command_17`'s battle-order payload. The record is the game's own
+    `RADI_BTL_ORDER` (it is passed to
+    `CBtlCharacterManager::MakeBtlCharacter`) and its layout is known
+    field-by-field, but only the team id and leader flag have been tied to
+    specific readers.
+  - `Command_35`'s character sub-object entries. The mask and per-slot
+    structure are understood; what each sub-object type does is not.
+  - `condition_word1` on the config-flag-mask condition. It is a mask of
+    outstanding requirements — `CheckCondition_03` clears bit 2 when config
+    flag `0x37B` is set and bit 3 when `0x37C` is — but the per-bit table
+    lookup handling the remaining bits has not been decoded correctly yet.
+- **15 opcodes are installed but unused** by any shipped script, so their
+  operand layouts rest on handler tracing alone with no real data to check
+  against. They are marked `traced` in the
+  [opcode reference](../opcodes/).
+- **Symbol coverage.** Names for characters, items, maps and music come from
+  community-compiled tables and are good; **flag names cover only 175 of
+  8,191**, so most flag ids appear as bare numbers.

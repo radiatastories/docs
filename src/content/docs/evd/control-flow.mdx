@@ -1,0 +1,237 @@
+---
+title: EVD control flow
+description: >-
+  Branches, the 20-handler condition table and its payload layouts, marker
+  seeks, and the 0xF0 marker family.
+sidebar:
+  label: 10 · Control flow
+  order: 3
+---
+
+import Tag from '../../../components/Tag.astro';
+
+## 1. Branches
+
+Both unconditional and conditional branches use opcode
+[`0x02`](../commands/02/). The command is:
+
+```asm
+header word
+branch word:   condition id in bits 24-31, signed 24-bit relative word offset in bits 0-23
+[condition payload: exactly two words, only when the condition id is non-zero]
+```
+
+`Command_02` reads the branch word, optionally reads the 8-byte condition
+payload and calls `CheckCondition`, then writes `SCR_DATA+0x0C` and returns `2`
+<Tag kind="confirmed" />:
+
+```asm
+lw    s1, 0x0c(scr_data) ; cursor after command header
+lw    s0, 0x00(s1)       ; branch word
+srl   v0, s0, 0x18
+andi  a1, v0, 0xff       ; condition id
+beqz  a1, no_condition
+addiu s1, s1, 4          ; delay slot: branch base moves past branch word
+lwu   v0, 4(s1)
+lwu   a2, 0(s1)
+dsll32 v0, v0, 0
+addiu s1, s1, 8          ; conditioned branch base also moves past payload
+or    a2, a2, v0
+jal   CRadiScript::CheckCondition
+...
+dsll32 s0, s0, 8
+dsrl32 s0, s0, 8         ; low 24 bits
+...                      ; sign extend bit 23
+sll   v0, s0, 2
+addu  v1, s1, v0
+sw    v1, 0x0c(scr_data)
+return 2
+```
+
+### 1.1 The offset base depends on the form
+
+Because the `beqz` delay slot increments the local cursor before the branch is
+resolved, the base the offset is measured from differs between the two forms:
+
+```asm
+base   = command_offset + (16 if conditional else 8)
+target = base + relative_words * 4
+```
+
+A condition id of `0` is an unconditional jump and carries no payload. The
+offset is measured in **words**, signed, from bit 23.
+
+### 1.2 Branch targets can overlap other commands
+
+Following branch targets across the corpus exposes a small number of overlapping
+decoded ranges, where a branch target lands on a word that is also an operand
+for a different path. These are valid bytecode layouts unless a handler trace
+proves otherwise — a decoder must keep explicit labels at raw offsets rather
+than assuming every command range is disjoint.
+
+## 2. Conditions
+
+`CRadiScript::CheckCondition` (`0x002E7F30`) masks the condition id to `0x7F`
+and dispatches through `CRadiScript::pfnCondTable` at `0x003B3970`. That table
+has 20 entries and maps base ids `00`–`13` directly onto `CheckCondition_00`
+through `CheckCondition_19` <Tag kind="confirmed" />.
+
+The condition byte splits as:
+
+| Bits | Meaning |
+|---|---|
+| 0–6 | Condition base — which test runs |
+| 7 | Invert the result |
+
+So `0x82` is handler `02` with the result inverted, and `0x90` is handler `10`
+inverted.
+
+### 2.1 The comparison protocol
+
+Condition handlers fill three out parameters — a flags/control byte, an actual
+value, and a compare value.
+
+If the handler sets control bit `0x80`, `CheckCondition` compares
+`actual_value` against `compare_value`. If it *also* sets bit `0x10`,
+`compare_value` is first treated as an event-value id and resolved through
+`GetEventValueForScript`.
+
+The low three control bits select the comparison <Tag kind="confirmed" />:
+
+| Selector | Comparison |
+|---:|---|
+| `0` | `actual == compare` |
+| `1` | `actual >= compare` |
+| `2` | `actual > compare` |
+| `3` | `actual != compare` |
+| `4` | `actual < compare` |
+| `5` | `actual <= compare` |
+
+If the handler does not set `0x80`, `CheckCondition` returns the handler's
+direct result. If the original condition id's top bit was set, that result is
+inverted.
+
+### 2.2 The two payload words arrive as one 64-bit value
+
+A detail that matters for anyone decoding the payload: `CheckCondition` takes
+the payload as an `unsigned long` and stores it with a **64-bit** `sd` before
+passing its address to the handler. On the Emotion Engine `unsigned long` is
+64 bits, so the two payload words arrive as a single value — word 0 in the low
+half, word 1 in the high half.
+
+Handlers that read at `+4` from that pointer are reading **condition word 1**,
+not a separate structure.
+
+### 2.3 Condition bases
+
+`CheckCondition_00` immediately returns `1`.
+
+`CheckCondition_02` is the most instructive, because it shows the packing every
+comparison-style condition reuses <Tag kind="confirmed" />:
+
+```asm
+lhu   v0, 0(a1)
+andi  a1, v0, 0x0fff
+jal   CRadiScript::GetEventValueForScript
+sw    v0, actual_value
+ld    v1, 0(a1)
+...   sign-extend low 32 bits ...
+sw    v1, compare_value
+lbu   a0, 3(a1)
+...   control = 0x80 | ((payload_byte3 >> 6) << 4) | ((payload_byte3 >> 1) & 7)
+```
+
+So for condition id `02`, payload word 0 carries the event-value id in its low
+12 bits and the comparison control in byte 3; payload word 1 is the value
+compared against.
+
+| Base | Name | Payload role |
+|---|---|---|
+| `01` | config event flag mask compare | Reads config event flags beginning at `word0 & 0xFFFF`; count is `(byte2 & 0x0F) + 1`; compares the built bitmask to `word1`. |
+| `02` | script event value compare | Reads the event value id from `word0 & 0x0FFF`; compares it to `word1`. |
+| `03` | config event flag mask direct | Builds and checks an event-flag mask directly, returning a boolean rather than using the common compare path. |
+| `04` | Radiata time compare | Computes a Radiata-time value in frames from a selected time source, using the low byte as a source/component mask (seconds, minutes, hours, days), then compares that to `word1`. |
+| `05` | runtime player value compare | Compares either `CRadiApp` field `+0x110` or float field `+0x124` converted to int, selected by `word0 & 1`, against `word1`. |
+| `07` | character table property compare | Resolves a character from `word0`/byte 2, dispatches a property-table function selected by byte 2, and compares that value to `word1`. |
+| `08` | character id category direct | Resolves an id and checks built-in id categories/ranges; returns a direct boolean. |
+| `0A` | script lookup direct | Tests script lookup state. Byte 7 of `word1` controls event-value script id, optional character abstraction, selector use, and slot-scan vs direct address lookup. |
+| `0B` | character runtime property compare | Reads a runtime character property byte from offsets `0/1/2/4/5/6/8`; byte 3 packs property selector, scan-all flag, compare selector, and event-value compare flag. |
+| `0C` | character item state direct | Direct character/item-state boolean; the handler resolves character data and checks `word1` state. |
+| `0D` | character status direct | Direct character status boolean. |
+| `0E` | character object state direct | Direct character/object-state boolean. |
+| `0F` | global config word direct | Direct compare against a global config word at `0x003B2820`, with masking behaviour for zero and `0x8000` cases. |
+| `10` | script or character state direct | Byte 3 of `word0` is the state selector; byte 2 plus the low halfword form the character abstraction. |
+
+The names for the branchier character conditions are deliberately conservative:
+the MIPS proves the data sources, calls and direct/compare behaviour, but some
+property meanings still need call-site evidence before they can be named
+confidently.
+
+:::caution[`condition_word1` on the config-flag-mask condition is not fully decoded]
+`CheckCondition_03` clears bit 2 when config flag `0x37B` is set and bit 3 when
+`0x37C` is, so the word is a mask of outstanding requirements — but the per-bit
+table lookup that handles the remaining bits has not been decoded correctly yet.
+:::
+
+## 3. Marker seeks
+
+[`Command_0d`](../commands/0d/) jumps to a marker chosen at run time. The
+argument byte's low three bits select where the index comes from:
+
+| Selector | Source |
+|---:|---|
+| `0` | The operand word is the marker index directly |
+| `1` | Built from a run of config flags (operand: first flag id in the low half, count − 1 in the high half) |
+| `2` | The operand is an **event value id**; the index is that value's contents |
+| `3` | Derived from the in-game clock |
+
+Selector `2` accounts for every use in the corpus that carries an operand. The
+marker itself is located through `GetMarkerAddress`
+([§2.2](../format/#22-marker-table)) and the resolved address written to
+`SCR_DATA+0x0C`.
+
+## 4. `0xF0` markers
+
+Opcode [`0xF0`](../commands/f0/) is 4 bytes total
+([§3.3](../format/#33-the-0xf0-exception)) and carries its payload in the header
+word itself:
+
+```asm
+ 31   30    28 27                            8 7            0
++----+--------+-------------------------------+--------------+
+| KG | mode   | 20-bit value                  | 0xF0         |
++----+--------+-------------------------------+--------------+
+```
+
+`Command_f0` (`0x002FD260`) branches on the mode field and **only handles modes
+`2` and `7`**. Every other mode falls through and returns without acting, which
+is exactly what makes them usable as inert in-stream markers.
+
+| Mode | Meaning |
+|---:|---|
+| `0` | A labelled point. Does nothing when executed; the marker table points at it and marker seeks jump to it. |
+| `2` | Calls `CCharacterPerson::SetSchedulePercent` with the 20-bit value. |
+| `3` | An animation frame trigger. Inert to the script stepper, but `CCharacterAnim::ChangeFrame_sub` (`0x002A4A20`) walks the marker table and fires the commands at this marker when the playing animation reaches the signed 20-bit frame in bits 8–27. |
+| `7` | Sets a status bit in `SCR_DATA`. The value `0xF00000F0` is the end-of-animation-script sentinel — frame infinity. |
+
+### 4.1 Mode 0's value is not the marker index
+
+Across 339 files with marker tables, only 131 have a constant offset between the
+20-bit value and the table index, and **208 are internally inconsistent within a
+single file**. The value is an author's label, not the index
+<Tag kind="inferred" />.
+
+### 4.2 Animation scripts are marker lists
+
+A character animation script is a list of markers, each opening with a frame
+trigger followed by the commands to run at that frame:
+
+```asm
+loc_000C:
+  anim_frame_trigger frame=5
+  control_battle_character mode=1 ...
+loc_0028:
+  anim_frame_trigger frame=5   ; yields
+loc_002C:
+  anim_script_end              ; the 0xF00000F0 sentinel
+```

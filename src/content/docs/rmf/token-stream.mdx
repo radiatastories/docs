@@ -1,0 +1,139 @@
+---
+title: The token stream
+description: >-
+  The one rule that separates a glyph from a command in an RMF stream, the
+  record size formula proved by the engine's own writer, and how a 16-bit
+  glyph word composes into a character code.
+sidebar:
+  label: 4–5 · Token stream
+  order: 2
+---
+
+import Tag from '../../../components/Tag.astro';
+import AddrRef from '../../../components/AddrRef.astro';
+
+## 4. The token stream
+
+The stream is a sequence of 16-bit little-endian words. There is exactly one rule
+for telling a glyph from a command, and it is decided by the **low byte** of the
+word (i.e. byte 0 of the record):
+
+```asm
+b0 = stream[i+0]                    ; low byte of the word
+b1 = stream[i+1]                    ; high byte of the word
+
+if b0 >= 0x10:
+    ; glyph: exactly 2 bytes
+    size = 2
+else:
+    ; command record
+    payload_words = (b1 >> 4) & 0x0F
+    subcommand    =  b1 & 0x0F
+    size          = 2 + payload_words * 2
+```
+
+This is not a heuristic.
+<AddrRef sym="WriteCommand" label="CTextMessage::WriteCommand(u16* dst, u8 cmd, u8 sub, u16 a, u16 b)" />
+is the engine's own record *writer*, and it ends with <Tag kind="confirmed" />:
+
+```asm
+002D5038  lbu   $a2, 1($a0)          ; current byte1
+002D503C  andi  $v1, $a3, 0xf        ; payload_words & 0xF
+002D5040  andi  $v0, $a3, 0xff
+002D5044  sll   $a1, $v1, 4          ; payload_words << 4
+002D5048  sll   $v0, $v0, 1          ; payload_words * 2
+002D5050  addu  $v0, $a0, $v0
+002D5054  addiu $v0, $v0, 2          ; return dst + 2 + payload*2
+002D5058  and   $v1, $a2, 0xFFFFFF0F ; keep low nibble (subcommand)
+002D505C  or    $v1, $v1, $a1        ; splice in payload count
+002D5060  sb    $v1, 1($a0)
+```
+
+Record shape, therefore:
+
+<div class="fields">
+  <div class="f k"><b>b0</b><span>command<br />0x00–0x0F</span></div>
+  <div class="f a"><b>b1 hi</b><span>payload<br />word count</span></div>
+  <div class="f p"><b>b1 lo</b><span>sub-<br />command</span></div>
+  <div class="f m"><b>u16</b><span>payload[0]</span></div>
+  <div class="f m"><b>u16</b><span>payload[1]</span></div>
+  <div class="f d"><b>…</b><span /></div>
+</div>
+
+Two consequences are worth stating explicitly:
+
+- The words `0x0001` (space) and `0x000A` (newline) are **commands**, not glyphs
+  — command `0x01` and `0x0A` with zero payload. `WriteCommand` accepts exactly
+  `0x00`, `0x01` and `0x0A` as its zero-payload commands, which is the same set.
+- A decoder that consults a character table first, and only falls through to the
+  record rule for unrecognised words, reaches the same answer — because no
+  legitimate glyph has a low byte below `0x10`.
+
+### 4.1 Two opcode spaces, one stream
+
+The stream is walked by
+<AddrRef sym="PutText" label="CTextMessage::PutText(unsigned int slot)" />. For
+every command record it does two things, in this order:
+
+1. Calls the owning object's `TextCallBackCommand` virtual (vtable slot `+8`) —
+   for conversations that is
+   <AddrRef sym="TextCallBackCommand" label="CTalk::TextCallBackCommand" />.
+2. Unless the callback vetoed it, runs its own handler from an 11-entry jump
+   table at <AddrRef sym="putTextJumpTable" label="0x003A3540" />, indexed by the
+   command byte, valid only for `0x00`–`0x0A`.
+
+So commands `0x00`–`0x0A` are **presentation** commands owned by the text
+renderer ([§6](../commands/#6-layer-a-text-engine-commands)), and commands `0x0E`
+and `0x0F` are **semantic** commands owned by `CTalk`
+([§7](../commands/#7-layer-b-ctalk-command-dispatch)). `0x06` is the one command
+that is meaningful to `CTalk` but has no renderer handler. Commands `0x0B`–`0x0D`
+are inert in both spaces.
+
+## 5. Glyph words
+
+When `PutText` sees a word whose low byte is `>= 0x10` it composes a 32-bit
+character code and hands it to `TextCallBackCharacter` (vtable slot `+0xC`)
+<Tag kind="confirmed" />:
+
+```asm
+002D5688  andi  $a0, $a1, 0xc0       ; b1 & 0xC0 -> attribute bits
+002D5690  sll   $t2, $a0, 8          ;             ... to bits 14-15
+002D5694  and   $a1, $a1, 0x3F       ; b1 & 0x3F -> font page
+002D5698  addiu $s1, $s1, -0x10      ; b0 - 0x10 -> slot in page
+002D569C  sll   $a0, $a1, 4          ; page * 16
+002D56A0  lbu   $v1, 0xc($s4)        ; text style byte (cmd 0x05)
+002D56A4  subu  $a1, $a0, $a1        ; page * 15
+002D56AC  sll   $a1, $a1, 4          ; page * 240
+002D56B0  addu  $s1, $s1, $a1        ; glyph index
+002D56B4  sll   $v1, $v1, 0x10       ; style -> bits 16+
+002D56B8  or    $v1, $v1, $t2
+002D56C0  or    $s1, $s1, $v1
+```
+
+In other words:
+
+```asm
+glyph_index = (b0 - 0x10) + (b1 & 0x3F) * 240
+char_code   = glyph_index | ((b1 & 0xC0) << 8) | (text_style << 16)
+```
+
+The Japanese build computes the same index from the same bytes, but packs *two*
+style bytes into the high half instead of one — `_MES_DATA+0x0D` at bits 16–23
+and `+0x0C` at bits 24+, where the English build sends only `+0x0C` at bits 16+
+and consults `+0x0D` separately. Nothing about the bytes in the stream changes,
+so this only matters if you are tracing the renderer. <Tag kind="confirmed" />
+
+| Field | Range | Meaning |
+|---|---|---|
+| slot | `b0 = 0x10`–`0xFF` | 240 usable slots per page. `b0 < 0x10` is reserved for commands. |
+| page | `b1 & 0x3F` | 64 pages × 240 slots = 15360 addressable glyphs. |
+| attributes | `b1 & 0xC0` | Two flag bits carried through to the renderer. `0x80` selects the file's embedded glyph block instead of the resident font ([§13](../layout/#13-embedded-glyph-data)) <Tag kind="confirmed" />; `0x40` occurs in both regions but its meaning is unknown ([§15](../reference/#15-open-questions)). |
+
+Example: `75 00` → `b0 = 0x75`, `b1 = 0x00` → index `0x65` = 101 on page 0, which
+is the glyph `'S'` in the English font.
+
+Two separate decode tables are needed in practice: the English and Japanese fonts
+assign different characters to the same numeric word, so the region of a file
+must be known before its text can be read. A per-glyph advance-width table is
+also needed, for the layout maths in
+[§11](../layout/#11-layout-mathematics).

@@ -1,0 +1,92 @@
+---
+title: Opcode reference
+description: >-
+  All 138 opcodes installed in CRadiScript::pfnTable, with handler behaviour,
+  per-build addresses and a link to each command's own page.
+sidebar:
+  label: 12 · Opcode reference
+  order: 5
+---
+
+import EvdCommandTable from '../../../components/EvdCommandTable.astro';
+
+138 opcodes are installed in the dispatch table. All 138 have a located handler
+and recorded evidence; **123 are exercised by at least one script in the game**,
+and 15 are installed but never used by any shipped script.
+
+`__sinit_r_script.cpp` at `0x003A6AA0` initialises `CRadiScript::pfnTable`.
+Symbolic execution of its copy sequence reconstructs the BSS table at
+`0x003B2D70`; the function pointer is the third word of each 12-byte entry.
+Every installed entry points at a `CRadiScript::Command_XX`, and every gap
+points at the shared no-op `CRadiScript::Command_xx` at `0x002E2E30`.
+
+Installed opcodes:
+
+```asm
+00 01 02 03 04 05 06 0A 0B 0D 0E 0F
+10 11 12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F
+20 21 22 23 24 25 26 27 28 29 2A 2B 2C 2D 2E 2F
+30 31 32 33 34 35 36 37 38 39 3A 3B
+40 41 42 43 44 45 46 47 48 49 4A 4B 4C 4D 4E 4F
+50 51 52 53 54 55 56 57 58 59 5A
+60 61 62 63 64 65 66 67 68 69 6A
+70 71 72 73 74 75 76 78 79 7A 7C 7D
+80 81 82 83 88 89 8A 8B 8E 8F
+A0 A1
+C0 C1 C2 C3 C4 C5 C6 C7
+D0 D1 D2 D3 D4 D5 D6
+E0 E1 E2
+F0 FF
+```
+
+Everything else falls through to the default handler:
+
+```asm
+07-09, 0C, 3C-3F, 5B-5F, 6B-6F, 77, 7B, 7E-7F,
+84-87, 8C-8D, 90-9F, A2-BF, C8-CF, D7-DF, E3-EF, F1-FE
+```
+
+## Families
+
+| Range | Area |
+|---|---|
+| `0x00`–`0x1F` | Script control, flags, event values, scene state, windows |
+| `0x20`–`0x3F` | Characters: loading, movement, rotation, animation, expression, collision |
+| `0x40`–`0x5F` | Background, map, landscape, camera, vibration |
+| `0x60`–`0x7F` | 2D primitives, textures, sound, movies |
+| `0x80`–`0x8F` | Vibration data, dialogue, text output, windows |
+| `0xA0`–`0xD5` | Person/schedule system, battle setup, special effects |
+| `0xF0`, `0xFF` | Markers and immediate return |
+
+Two carry more weight than the rest: [`0x14`](../expression/) is the
+general-purpose expression command and the single most-used opcode, and
+[`0x02`](../control-flow/) is every branch and jump.
+
+## Addresses across builds
+
+Click an opcode for its handler address in each build. Coverage is uneven, and
+the reason matters:
+
+| Build | Handlers with a confirmed address |
+|---|---:|
+| Debug (`SLUS-21262` prototype) | 138 of 138 |
+| ENG (USA release) | 85 of 138 |
+| JPN (`SLPM-65800` release) | 85 of 138 |
+
+The debug build ships a real linker map, so every handler is named and placed.
+The release maps are **derived**: their confirmation policy omits any function
+whose body does not match the reference build, so 53 handlers are simply not
+pinned down there. A missing release address means "not confirmed in that map",
+not "absent from that build" — the handler is installed in the dispatch table in
+all three.
+
+The 85 that are confirmed agree exactly with the addresses recovered
+independently from the dispatch-table dump, in both release builds.
+
+## All opcodes
+
+Click an opcode for its per-build addresses, or the command name for its own
+page. Rows marked `traced` have a located handler but no shipped script that
+uses them.
+
+<EvdCommandTable />

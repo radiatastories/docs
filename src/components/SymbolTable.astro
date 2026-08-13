@@ -1,0 +1,76 @@
+---
+/**
+ * The §16 symbol reference, rendered from src/data/addresses.ts so it can
+ * never disagree with the <AddrRef> popups elsewhere in the docs.
+ *
+ * Addresses are revealed by clicking the symbol, exactly as they are in the
+ * command tables — one interaction for looking up an address anywhere on the
+ * site, rather than a popup here and three columns there.
+ */
+import { SYMBOLS, SYMBOL_GROUPS } from '../data/addresses';
+import AddrRef from './AddrRef.astro';
+
+/** Split on backticks so `like this` renders as code. */
+function segments(text: string) {
+  return text.split('`').map((part, i) => ({ code: i % 2 === 1, text: part }));
+}
+
+const grouped = SYMBOL_GROUPS.map((group) => ({
+  group,
+  entries: SYMBOLS.filter((s) => s.group === group),
+})).filter((g) => g.entries.length > 0);
+---
+
+<div class="symbol-table">
+  <table>
+    <thead>
+      <tr>
+        <th class="symbol-table__name">Symbol</th>
+        <th>Role</th>
+      </tr>
+    </thead>
+    <tbody>
+      {
+        grouped.map(({ group, entries }) => (
+          <>
+            <tr class="symbol-table__group">
+              <td colspan="2">{group}</td>
+            </tr>
+            {entries.map((s) => (
+              <tr>
+                <td class="symbol-table__name">
+                  <AddrRef sym={s.key} label={s.name} />
+                </td>
+                <td>
+                  {s.role ? (
+                    segments(s.role).map((seg) => (seg.code ? <code>{seg.text}</code> : seg.text))
+                  ) : (
+                    <span class="symbol-table__none">—</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </>
+        ))
+      }
+    </tbody>
+  </table>
+</div>
+
+<style>
+  .symbol-table {
+    overflow-x: auto;
+  }
+  .symbol-table table {
+    margin-block: 0;
+  }
+  .symbol-table__group td {
+    background: var(--sl-color-gray-6);
+    color: var(--sl-color-text-accent);
+    font-weight: 700;
+    border-bottom: 2px solid var(--sl-color-accent);
+  }
+  .symbol-table__none {
+    color: var(--sl-color-gray-4);
+  }
+</style>

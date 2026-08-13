@@ -1,0 +1,230 @@
+---
+/**
+ * An inline symbol name that reveals its per-build addresses on click.
+ *
+ * Two ways to call it:
+ *
+ *   <AddrRef sym="_CbSentence" />              looked up in src/data/addresses.ts
+ *   <AddrRef sym="PutText" label="…" />        …with different display text
+ *   <AddrRef title="…" rows={[…]} label="…" /> explicit rows, for data that
+ *                                              lives in its own file
+ *
+ * An unknown `sym` is a build error rather than a silently dead reference, so
+ * the docs cannot drift away from the address data.
+ */
+import { lookup, BUILDS } from '../data/addresses';
+
+interface Row {
+  label: string;
+  detail: string;
+  addr: string;
+}
+
+interface Props {
+  sym?: string;
+  label?: string;
+  title?: string;
+  rows?: Row[];
+}
+
+const { sym, label, title, rows: explicitRows } = Astro.props;
+
+let rows: Row[];
+let panelTitle: string;
+let text: string;
+
+if (explicitRows) {
+  rows = explicitRows.filter((r) => r.addr);
+  panelTitle = title ?? label ?? '';
+  text = label ?? panelTitle;
+} else {
+  if (!sym) {
+    throw new Error('<AddrRef> needs either a `sym` or an explicit `rows` array.');
+  }
+  const entry = lookup(sym);
+  if (!entry) {
+    throw new Error(
+      `<AddrRef sym="${sym}"> — no such symbol in src/data/addresses.ts. ` +
+        `Add it there, or fix the key.`
+    );
+  }
+  rows = BUILDS.map((b) => ({
+    label: b.label,
+    detail: b.detail,
+    addr: entry[b.id],
+  })).filter((r): r is Row => r.addr !== null);
+  panelTitle = entry.name;
+  text = label ?? entry.key;
+}
+---
+
+<button
+  type="button"
+  class="addr-ref"
+  aria-label={`${panelTitle} — show addresses`}
+  data-title={panelTitle}
+  data-rows={JSON.stringify(rows)}
+>
+  {text}
+</button>
+
+<style>
+  .addr-ref {
+    font-family: var(--sl-font-mono);
+    font-size: var(--sl-text-code-sm);
+    color: var(--rs-mauve);
+    background: none;
+    border: none;
+    border-bottom: 1px dotted currentColor;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    line-height: inherit;
+    white-space: nowrap;
+  }
+  .addr-ref:hover,
+  .addr-ref:focus-visible {
+    color: var(--sl-color-text-accent);
+    border-bottom-style: solid;
+  }
+</style>
+
+<script>
+  // One listener for every <AddrRef> on the page. The panel is appended to
+  // <body> and positioned fixed, so it is never clipped by the horizontally
+  // scrolling tables these references mostly live in.
+  (() => {
+    let panel: HTMLElement | null = null;
+    let owner: HTMLElement | null = null;
+
+    interface Row {
+      label: string;
+      detail: string;
+      addr: string;
+    }
+
+    function close() {
+      panel?.remove();
+      panel = null;
+      owner?.setAttribute('aria-expanded', 'false');
+      owner = null;
+    }
+
+    function open(btn: HTMLElement) {
+      close();
+
+      const title = btn.dataset.title ?? '';
+      let rows: Row[] = [];
+      try {
+        rows = JSON.parse(btn.dataset.rows ?? '[]');
+      } catch {
+        return;
+      }
+
+      panel = document.createElement('div');
+      panel.className = 'addr-panel';
+      panel.setAttribute('role', 'dialog');
+
+      const h = document.createElement('div');
+      h.className = 'addr-panel__title';
+      h.textContent = title;
+      panel.append(h);
+
+      for (const r of rows) {
+        const line = document.createElement('div');
+        line.className = 'addr-panel__row';
+
+        const k = document.createElement('span');
+        k.className = 'addr-panel__key';
+        k.textContent = `${r.label} (${r.detail})`;
+
+        const v = document.createElement('span');
+        v.className = 'addr-panel__val';
+        v.textContent = r.addr;
+
+        line.append(k, v);
+        panel.append(line);
+      }
+
+      document.body.append(panel);
+      owner = btn;
+      btn.setAttribute('aria-expanded', 'true');
+      place(btn);
+    }
+
+    function place(btn: HTMLElement) {
+      if (!panel) return;
+      const anchor = btn.getBoundingClientRect();
+      const box = panel.getBoundingClientRect();
+      const gap = 6;
+      const pad = 8;
+
+      let top = anchor.bottom + gap;
+      if (top + box.height > window.innerHeight - pad) {
+        top = anchor.top - box.height - gap;
+      }
+      let left = anchor.left;
+      if (left + box.width > window.innerWidth - pad) {
+        left = window.innerWidth - box.width - pad;
+      }
+
+      panel.style.top = `${Math.max(pad, top)}px`;
+      panel.style.left = `${Math.max(pad, left)}px`;
+    }
+
+    document.addEventListener('click', (ev) => {
+      const btn = (ev.target as Element | null)?.closest<HTMLElement>('.addr-ref');
+      if (btn) {
+        ev.stopPropagation();
+        if (btn === owner) close();
+        else open(btn);
+        return;
+      }
+      if (panel && !panel.contains(ev.target as Node)) close();
+    });
+
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') close();
+    });
+
+    // Reposition rather than leave a detached panel floating over the page.
+    window.addEventListener('scroll', () => owner && place(owner), true);
+    window.addEventListener('resize', () => owner && place(owner));
+  })();
+</script>
+
+<style is:global>
+  .addr-panel {
+    position: fixed;
+    z-index: 100;
+    background: var(--sl-color-bg-nav);
+    border: 1px solid var(--sl-color-accent);
+    border-radius: 0.5rem;
+    padding: 0.6rem 0.9rem;
+    box-shadow: var(--sl-shadow-md);
+    font-family: var(--sl-font-mono);
+    font-size: var(--sl-text-xs);
+    line-height: 1.7;
+    max-width: min(28rem, calc(100vw - 1rem));
+  }
+  .addr-panel__title {
+    color: var(--sl-color-text-accent);
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+    word-break: break-word;
+    white-space: normal;
+  }
+  .addr-panel__row {
+    display: flex;
+    gap: 1.25rem;
+    justify-content: space-between;
+    white-space: nowrap;
+  }
+  .addr-panel__key {
+    color: var(--sl-color-gray-3);
+  }
+  .addr-panel__val {
+    color: var(--rs-green);
+    font-weight: 600;
+  }
+</style>

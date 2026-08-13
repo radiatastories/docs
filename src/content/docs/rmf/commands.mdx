@@ -1,0 +1,645 @@
+---
+title: RMF commands
+description: >-
+  Both opcode spaces that operate on an RMF stream — the eleven text-engine
+  commands owned by the renderer, the 48-entry CTalk dispatch table, and the
+  return flags that let a callback steer the stream walker.
+sidebar:
+  label: 6–8 · Commands
+  order: 3
+---
+
+import Tag from '../../../components/Tag.astro';
+import AddrRef from '../../../components/AddrRef.astro';
+import FilterTable from '../../../components/FilterTable.astro';
+
+## 6. Layer A: text-engine commands
+
+Commands `0x00`–`0x0A`. These are the eleven entries of the `PutText` jump table
+at <AddrRef sym="putTextJumpTable" label="0x003A3540" />. All of them operate on
+the current `_MES_DATA` block; the offsets in the last column are fields of that
+structure. Everything in this section is <Tag kind="confirmed" /> from the
+jump-table handlers.
+
+<table>
+  <thead>
+    <tr>
+      <th>Cmd</th>
+      <th>Name</th>
+      <th>Handler</th>
+      <th>Payload</th>
+      <th>Effect / state touched</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>00</code></td>
+      <td>End</td>
+      <td><code>0x2D5318</code></td>
+      <td>0 words</td>
+      <td>
+        Terminates the run. Commits the max line width to <code>+0x1C</code>/<code>+0x1E</code> and
+        clears the stream pointer <code>+0x34</code>. Sets renderer state <code>2</code>.
+      </td>
+    </tr>
+    <tr>
+      <td><code>01</code></td>
+      <td>Space</td>
+      <td><code>0x2D5350</code></td>
+      <td>0 words</td>
+      <td>
+        <b>Region-dependent.</b> English builds advance the pen by
+        <code>(width * 12) &gt;&gt; 12</code>, about three quarters of a cell; the Japanese build
+        advances by the full cell, <code>(width * 32) &gt;&gt; 12</code>, and never computes the
+        narrow term at all. Either way one character is refunded from the typewriter budget. See
+        <a href="../layout/#111-glyph-cell-and-text-speed">§11.1</a>.
+      </td>
+    </tr>
+    <tr>
+      <td><code>02</code></td>
+      <td>Color</td>
+      <td><code>0x2D5370</code></td>
+      <td>2 words</td>
+      <td>
+        <code>color32 = (word[1] &lt;&lt; 16) | word[0]</code>, i.e. the four payload bytes are
+        <code>R G B A</code> in stream order. Sub <code>0</code> → text colour (<code>+0x00</code>);
+        sub <code>1</code> → drop-shadow colour (<code>+0x04</code>). Alpha is PS2-style:
+        <code>0x80</code> is fully opaque.
+      </td>
+    </tr>
+    <tr>
+      <td><code>03</code></td>
+      <td>Dimensions</td>
+      <td><code>0x2D53A0</code></td>
+      <td>2 words</td>
+      <td>
+        Glyph cell width (<code>+0x10</code>) and height (<code>+0x12</code>) as <b>U8.8 fixed
+        point</b> — two plain 16-bit values, with no fixed marker bytes. Sub <code>1</code>
+        multiplies into the current values instead of replacing them. Also recomputes the cached
+        advances; the English builds derive one term more than the Japanese build does
+        (<a href="../layout/#111-glyph-cell-and-text-speed">§11.1</a>). Defaults are
+        <code>11.20 × 22.40</code> in English data and <code>14.40 × 16.00</code> in Japanese.
+      </td>
+    </tr>
+    <tr>
+      <td><code>04</code></td>
+      <td>Position</td>
+      <td><code>0x2D5400</code></td>
+      <td>2 words</td>
+      <td>
+        Two <b>signed</b> 16-bit coordinates. Sub <code>0</code> sets the pen and the line origin
+        absolutely (<code>+0x14</code>/<code>+0x16</code> and <code>+0x18</code>/<code>+0x1A</code>);
+        sub <code>1</code> adds to them.
+      </td>
+    </tr>
+    <tr>
+      <td><code>05</code></td>
+      <td>TextStyle</td>
+      <td><code>0x2D5498</code></td>
+      <td>0 words</td>
+      <td>
+        Stores <code>subcommand % 3</code> into <code>+0x0C</code>. That value is folded into bits
+        16+ of every following character code
+        (<a href="../token-stream/#5-glyph-words">§5</a>) and is compared against the cached font
+        bank in <code>+0x0D</code>, so it selects which font source subsequent glyphs come from.
+        Dialogue consistently uses <code>05 01</code>. <Tag kind="inferred" /> (purpose),
+        <Tag kind="confirmed" /> (mechanism)
+      </td>
+    </tr>
+    <tr class="dim">
+      <td><code>06</code></td>
+      <td>Signal</td>
+      <td>—</td>
+      <td>1 word</td>
+      <td>
+        No renderer handler; falls through to <AddrRef sym="_CbSignal" label="CTalk::_CbSignal" />
+        (<a href="#7-layer-b-ctalk-command-dispatch">§7</a>).
+      </td>
+    </tr>
+    <tr>
+      <td><code>07</code></td>
+      <td>TextSpeed</td>
+      <td><code>0x2D54C8</code></td>
+      <td>1 word</td>
+      <td>
+        Writes the payload word to the typewriter rate <code>+0x20</code>, again <b>U8.8 fixed
+        point</b>: <code>07 10 00 03</code> is speed <code>3.0</code>. The renderer accumulates this
+        into <code>+0x28</code> and spends <code>0x100</code> per glyph.
+      </td>
+    </tr>
+    <tr class="dim">
+      <td><code>08</code></td>
+      <td>—</td>
+      <td>—</td>
+      <td>—</td>
+      <td>Jump-table entry points at the skip label. Inert.</td>
+    </tr>
+    <tr>
+      <td><code>09</code></td>
+      <td>StyleSave / StyleRestore</td>
+      <td><code>0x2D54D8</code></td>
+      <td>1 word</td>
+      <td>
+        The payload word is a <b>field mask</b>. Sub <code>0</code> allocates a 0x58-byte scratch
+        block (<code>+0x2C</code>), records the mask at <code>+0x28</code> of that block, and copies
+        the selected fields out. Sub <code>1</code> copies them back, frees the block and restores
+        the pen. See the mask table below.
+      </td>
+    </tr>
+    <tr>
+      <td><code>0A</code></td>
+      <td>Newline</td>
+      <td><code>0x2D5660</code></td>
+      <td>0 words</td>
+      <td>
+        Updates the running max line width in <code>+0x1C</code>, resets the pen X to the line
+        origin <code>+0x18</code>, and advances the pen Y by the current line height.
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+### 6.1 The 09 save and restore mask
+
+Each bit selects one field of `_MES_DATA` to push or pop. This is a
+general-purpose style stack; ruby text ([§12](../layout/#12-ruby-and-furigana))
+is simply its most visible user.
+
+| Bit | Field | Meaning |
+|---|---|---|
+| `0x01` | `u32 +0x00` | Text colour |
+| `0x02` | `u32 +0x04` | Shadow colour |
+| `0x04` | `s16 +0x14` | Pen X |
+| `0x08` | `s16 +0x16` | Pen Y |
+| `0x10` | `u16 +0x10` | Glyph width |
+| `0x20` | `u16 +0x12` | Glyph height |
+| `0x40` | `u8 +0x0C` | Text style (cmd `05`) |
+| `0x80` | `u32 +0x20` | Text speed |
+
+Ruby annotations use mask `0x00BC` = pen position + dimensions + speed,
+deliberately omitting the two colour bits so the annotation inherits the base
+text's colour.
+
+## 7. Layer B: CTalk command dispatch
+
+Commands `0x0E` and `0x0F`.
+<AddrRef sym="TextCallBackCommand" label="CTalk::TextCallBackCommand" /> turns a
+record into a table index <Tag kind="confirmed" />:
+
+```asm
+00317EF4  lbu   $v1, 0($t0)          ; cmd[0]
+00317EF8  bne   $v1, 0x0E, check_0F
+00317F00  lbu   $v0, 1($t0)
+00317F04  andi  $v0, $v0, 0xf        ; subcommand nibble
+00317F08  addiu $v0, $v0, 0x10       ; 0x0E xN -> 0x10 + N
+; check_0F:
+00317F24  lbu   $v0, 1($t0)
+00317F28  andi  $v0, $v0, 0xf
+00317F2C  addiu $v0, $v0, 0x20       ; 0x0F xN -> 0x20 + N
+; dispatch: index * 12 into ms_pCommandFuncTable
+00317F3C  sll   $v0, $v1, 1
+00317F44  addu  $v1, $v0, $v1        ; index * 3
+00317F50  sll   $v1, $v1, 2          ; ... * 4  = index * 12
+00317F4C  lui   $v0, 0x3b
+00317F54  addiu $v0, $v0, 0x3a80     ; CTalk::ms_pCommandFuncTable
+00317F5C  jal   0x149400             ; __ptmf_scall
+```
+
+Dispatch rules:
+
+- `0x00`–`0x0D`: index is the command byte itself.
+- `0x0E`: index is `0x10 + (cmd[1] & 0x0F)`.
+- `0x0F`: index is `0x20 + (cmd[1] & 0x0F)`.
+
+The runtime table
+<AddrRef sym="ms_pCommandFuncTable" label="CTalk::ms_pCommandFuncTable" /> lives
+in BSS, size `0x240` = 48 entries × 12 bytes (a Metrowerks pointer-to-member
+function). It is populated from a
+<AddrRef sym="commandTableInit" label="static initializer" /> that uses 16-byte
+records shaped `{ u32 0, u32 0xFFFFFFFF, u32 callback_addr, u32 0 }`, 48 of them.
+Both forms were dumped and agree. <Tag kind="confirmed" />
+
+Click any callback name for its address in all three builds.
+
+<FilterTable noun="commands" placeholder="Filter by opcode, name, or keyword…">
+<table>
+  <thead>
+    <tr>
+      <th>Index</th>
+      <th>Record</th>
+      <th>Callback</th>
+      <th>Payload</th>
+      <th>Fields and behaviour</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td colspan="5">Direct commands — 0x00 through 0x0F</td>
+    </tr>
+    <tr data-k="end terminator">
+      <td><code>0x00</code></td>
+      <td><code>00 00</code></td>
+      <td><AddrRef sym="_CbEnd" /></td>
+      <td>0 words</td>
+      <td>
+        Ends the message. Writes renderer state <code>2</code> to <code>this+0x1E0</code>, then
+        tears down the talk session (releases bustups, restores the camera, clears the name plate).
+        This is the word that terminates every packet.
+      </td>
+    </tr>
+    <tr class="dim" data-k="space">
+      <td><code>0x01</code></td>
+      <td><code>01 00</code></td>
+      <td><AddrRef sym="_CbNop" /></td>
+      <td>0 words</td>
+      <td>No <code>CTalk</code> action; handled by the renderer as <b>space</b>.</td>
+    </tr>
+    <tr class="dim" data-k="color colour">
+      <td><code>0x02</code></td>
+      <td><code>02 2x</code></td>
+      <td><AddrRef sym="_CbNop" /></td>
+      <td>2 words</td>
+      <td>Renderer-only: <b>Color</b> (<a href="#6-layer-a-text-engine-commands">§6</a>).</td>
+    </tr>
+    <tr class="dim" data-k="dimensions size cell">
+      <td><code>0x03</code></td>
+      <td><code>03 2x</code></td>
+      <td><AddrRef sym="_CbNop" /></td>
+      <td>2 words</td>
+      <td>Renderer-only: <b>Dimensions</b> (<a href="#6-layer-a-text-engine-commands">§6</a>).</td>
+    </tr>
+    <tr class="dim" data-k="position pos xy">
+      <td><code>0x04</code></td>
+      <td><code>04 2x</code></td>
+      <td><AddrRef sym="_CbNop" /></td>
+      <td>2 words</td>
+      <td>Renderer-only: <b>Position</b> (<a href="#6-layer-a-text-engine-commands">§6</a>).</td>
+    </tr>
+    <tr class="dim" data-k="textstyle font">
+      <td><code>0x05</code></td>
+      <td><code>05 0x</code></td>
+      <td><AddrRef sym="_CbNop" /></td>
+      <td>0 words</td>
+      <td>Renderer-only: <b>TextStyle</b> (<a href="#6-layer-a-text-engine-commands">§6</a>).</td>
+    </tr>
+    <tr data-k="signal event evd sync">
+      <td><code>0x06</code></td>
+      <td><code>06 1x</code></td>
+      <td><AddrRef sym="_CbSignal" /></td>
+      <td>1 word</td>
+      <td>
+        <code>this+0x114 = u16[2]</code>. A one-word value the event script can poll mid-sentence —
+        the standard way an EVD script synchronises an action with a point in the dialogue.
+      </td>
+    </tr>
+    <tr class="dim" data-k="textspeed typewriter">
+      <td><code>0x07</code></td>
+      <td><code>07 1x</code></td>
+      <td><AddrRef sym="_CbNop" /></td>
+      <td>1 word</td>
+      <td>Renderer-only: <b>TextSpeed</b> (<a href="#6-layer-a-text-engine-commands">§6</a>).</td>
+    </tr>
+    <tr class="dim" data-k="unused">
+      <td><code>0x08</code></td>
+      <td><code>08 xx</code></td>
+      <td><AddrRef sym="_CbNop" /></td>
+      <td>—</td>
+      <td>Unused.</td>
+    </tr>
+    <tr class="dim" data-k="stylesave stylerestore ruby mask">
+      <td><code>0x09</code></td>
+      <td><code>09 1x</code></td>
+      <td><AddrRef sym="_CbNop" /></td>
+      <td>1 word</td>
+      <td>
+        Renderer-only: <b>StyleSave / StyleRestore</b>
+        (<a href="#6-layer-a-text-engine-commands">§6</a>).
+      </td>
+    </tr>
+    <tr class="dim" data-k="newline linebreak">
+      <td><code>0x0A</code></td>
+      <td><code>0A 00</code></td>
+      <td><AddrRef sym="_CbNop" /></td>
+      <td>0 words</td>
+      <td>Renderer-only: <b>Newline</b> (<a href="#6-layer-a-text-engine-commands">§6</a>).</td>
+    </tr>
+    <tr class="dim" data-k="unused inert">
+      <td><code>0x0B</code>–<code>0x0D</code></td>
+      <td>—</td>
+      <td><AddrRef sym="_CbNop" /></td>
+      <td>—</td>
+      <td>Inert in both layers. Never observed in real data.</td>
+    </tr>
+    <tr class="dim" data-k="prefix remap">
+      <td><code>0x0E</code>, <code>0x0F</code></td>
+      <td>—</td>
+      <td><AddrRef sym="_CbNop" /></td>
+      <td>—</td>
+      <td>Never reached: these command bytes are always remapped by the subcommand nibble.</td>
+    </tr>
+
+    <tr>
+      <td colspan="5">0x0E xN — bustup and speaker control</td>
+    </tr>
+    <tr data-k="speaker bustup cast">
+      <td><code>0x10</code></td>
+      <td><code>0E 20</code></td>
+      <td><AddrRef sym="_CbSpeaker" /></td>
+      <td>2 words</td>
+      <td>
+        <code>u16[2]</code> = speaker table index (1-based), resolved through
+        <code>GetCharaNo</code>.<br />
+        <code>u16[4]</code> = mode, stored at <code>this+0x1DA</code>; only bits 0–1 are used:
+        <code>0</code> = create bustup, auto facing (<code>0xFF</code>) · <code>1</code> = no bustup
+        · <code>2</code> = create bustup facing <code>0</code> · <code>3</code> = create bustup
+        facing <code>1</code>.<br />
+        Any previously active bustup slot is released first. Only modes 0 and 1 appear in observed
+        data.
+      </td>
+    </tr>
+    <tr data-k="visible show hide">
+      <td><code>0x11</code></td>
+      <td><code>0E 1x / 0E 2x</code></td>
+      <td><AddrRef sym="_CbBupVisible" /></td>
+      <td>varies</td>
+      <td>
+        <code>u16[2]</code> = speaker index, <code>u8[4]</code> = visibility mode. Shows or hides an
+        already-created bustup without destroying it.
+      </td>
+    </tr>
+    <tr data-k="direction facing">
+      <td><code>0x12</code></td>
+      <td><code>0E x2</code></td>
+      <td><AddrRef sym="_CbBupDirection" /></td>
+      <td>varies</td>
+      <td>
+        <code>u16[2]</code> = speaker index. Resolves the bustup via <code>SearchBustup</code>; the
+        body is a stub in this build. <Tag kind="inferred" />
+      </td>
+    </tr>
+    <tr data-k="position placement">
+      <td><code>0x13</code></td>
+      <td><code>0E x3</code></td>
+      <td><AddrRef sym="_CbBupPosition" /></td>
+      <td>varies</td>
+      <td>Byte-identical to <code>_CbBupDirection</code> here. <Tag kind="inferred" /></td>
+    </tr>
+    <tr data-k="face expression">
+      <td><code>0x14</code></td>
+      <td><code>0E 24</code></td>
+      <td><AddrRef sym="_CbFace" /></td>
+      <td>2 words</td>
+      <td>
+        <code>u16[2]</code> = speaker index, <code>u16[4]</code> = face id. Changes the 3D model's
+        facial expression mid-sentence. Note the engine name is <i>Face</i>, not "expression".
+      </td>
+    </tr>
+    <tr data-k="speak lipsync mouth">
+      <td><code>0x15</code></td>
+      <td><code>0E x5</code></td>
+      <td><AddrRef sym="_CbSpeak" /></td>
+      <td>2 words</td>
+      <td>
+        <code>u16[2]</code> = speaker index, <code>u16[4]</code> = speak flags. Starts and stops
+        mouth animation independently of a voice clip.
+      </td>
+    </tr>
+    <tr data-k="speakingcycle mouth timing">
+      <td><code>0x16</code></td>
+      <td><code>0E x6</code></td>
+      <td><AddrRef sym="_CbSpeakingCycle" /></td>
+      <td>2 words</td>
+      <td>
+        <code>u16[2]</code> = speaker index, <code>u8[4]</code>/<code>u8[5]</code> = open/close
+        cycle timings.
+      </td>
+    </tr>
+    <tr data-k="emotion mood">
+      <td><code>0x17</code></td>
+      <td><code>0E x7</code></td>
+      <td><AddrRef sym="_CbEmotion" /></td>
+      <td>varies</td>
+      <td>
+        <code>u16[2]</code> = speaker index, <code>u8[4]</code> = emotion flags,
+        <code>s16[5]</code> = magnitude/delta.
+      </td>
+    </tr>
+    <tr class="dim" data-k="err assertion trap">
+      <td><code>0x18</code>, <code>0x19</code></td>
+      <td><code>0E x8 / 0E x9</code></td>
+      <td><AddrRef sym="_CbErr" /></td>
+      <td>—</td>
+      <td>Assertion trap. Not valid data.</td>
+    </tr>
+    <tr data-k="eyemove gaze lookat">
+      <td><code>0x1A</code></td>
+      <td><code>0E xA</code></td>
+      <td><AddrRef sym="_CbEyeMove" /></td>
+      <td>varies</td>
+      <td>
+        <code>u16[2]</code> = speaker index, <code>u8[4]</code> = look-at target,
+        <code>u8[5]</code> = duration, <code>u8[6]</code>/<code>u8[7]</code> = X/Y offsets.
+      </td>
+    </tr>
+    <tr class="dim" data-k="err assertion trap">
+      <td><code>0x1B</code></td>
+      <td><code>0E xB</code></td>
+      <td><AddrRef sym="_CbErr" /></td>
+      <td>—</td>
+      <td>Assertion trap.</td>
+    </tr>
+    <tr data-k="eyenumber eyes variant">
+      <td><code>0x1C</code></td>
+      <td><code>0E xC</code></td>
+      <td><AddrRef sym="_CbEyeNumber" /></td>
+      <td>2 words</td>
+      <td><code>u16[2]</code> = speaker index, <code>u8[4]</code> = eye variant index.</td>
+    </tr>
+    <tr data-k="bupreleasecount refcount lifetime">
+      <td><code>0x1D</code></td>
+      <td><code>0E xD</code></td>
+      <td><AddrRef sym="_CbBupReleaseCount" /></td>
+      <td>2 words</td>
+      <td>
+        <code>u16[2]</code> = speaker index, <code>u16[4]</code> written to
+        <code>this[0x1BC + slot*2]</code>. A per-slot refcount controlling how long the bustup
+        survives after the message ends.
+      </td>
+    </tr>
+    <tr data-k="namewindow nameplate">
+      <td><code>0x1E</code></td>
+      <td><code>0E 4E</code></td>
+      <td><AddrRef sym="_CbNameWindow" /></td>
+      <td>4 words</td>
+      <td>
+        <code>u16[2]</code> = speaker index · <code>u8[4]</code> = mode · <code>u16[6]</code> =
+        vertical offset of the plate, <b>signed</b> · <code>u16[8]</code> = override name id.<br />
+        Mode bits: <code>&amp;3</code> selects the plate style and <code>0</code> disables the plate
+        entirely; <code>&amp;4</code> is a layout flag; <code>&amp;8</code> switches the window
+        template from 6 to 5. The vertical offset tracks the line count of the message it belongs to
+        (<a href="../layout/#111-glyph-cell-and-text-speed">§11.1</a>).
+      </td>
+    </tr>
+    <tr class="dim" data-k="err assertion trap">
+      <td><code>0x1F</code></td>
+      <td><code>0E xF</code></td>
+      <td><AddrRef sym="_CbErr" /></td>
+      <td>—</td>
+      <td>Assertion trap.</td>
+    </tr>
+
+    <tr>
+      <td colspan="5">0x0F xN — flow, sentences and audio</td>
+    </tr>
+    <tr data-k="waittime wait duration cursor continue">
+      <td><code>0x20</code></td>
+      <td><code>0F 20</code></td>
+      <td><AddrRef sym="_CbWaitTime" /></td>
+      <td>2 words</td>
+      <td>
+        <code>u16[2]</code> = frames to wait. <code>0xFFFF</code> loads the "infinite" float
+        <code>0x7F7FFFFF</code> into the timer at <code>this+0x118</code>.<br />
+        <code>u16[4]</code> = flags, masked with <code>0xFD</code> and stored at
+        <code>this+0x11C</code>. Bit <code>0</code> shows the blinking continue cursor. Bit
+        <code>1</code> is discarded by the mask.<br />
+        Observed values are <code>03 00</code> for a normal press-to-continue box and
+        <code>02 00</code> for a timed wait with no cursor.
+      </td>
+    </tr>
+    <tr class="dim" data-k="err assertion trap">
+      <td><code>0x21</code></td>
+      <td><code>0F x1</code></td>
+      <td><AddrRef sym="_CbErr" /></td>
+      <td>—</td>
+      <td>Assertion trap.</td>
+    </tr>
+    <tr data-k="waitselect choice selection menu">
+      <td><code>0x22</code></td>
+      <td><code>0F 2x</code></td>
+      <td><AddrRef sym="_CbWaitSelect" /></td>
+      <td>2 words</td>
+      <td>
+        <code>u16[2]</code> = time limit (<code>0</code> is rewritten to <code>0xFFFF</code> = no
+        limit), <code>u16[4]</code> = option count, stored at <code>this+0x11D</code>. The low 7
+        bits are the count and bit <code>0x80</code> is a flag; a list of
+        <code>count*4 + 0x10</code> bytes is allocated for the cursor state. Options follow in the
+        stream, each terminated by <code>00 00</code>.
+      </td>
+    </tr>
+    <tr data-k="prohibitskip skip">
+      <td><code>0x23</code></td>
+      <td><code>0F 3x</code></td>
+      <td><AddrRef sym="_CbProhibitSkip" /></td>
+      <td>1 word</td>
+      <td>
+        <code>u8[2]</code> non-zero sets <code>this+0x10A</code> bit 0 (skipping disallowed) and
+        forces the current text to finish instantly; zero clears it.
+      </td>
+    </tr>
+    <tr data-k="waitselect2 choices dialogue">
+      <td><code>0x24</code></td>
+      <td><code>0F 24</code></td>
+      <td><AddrRef sym="_CbWaitSelect2" /></td>
+      <td>2 words</td>
+      <td>
+        Same field layout as <code>_CbWaitSelect</code>, different presentation (the standard
+        windowed choice list). This is the form used by ordinary dialogue choices, always as
+        <code>0F 24 00 00 &lt;count&gt;</code>.
+      </td>
+    </tr>
+    <tr data-k="sentence text glyph count flags autocenter">
+      <td><code>0x25</code></td>
+      <td><code>0F 25</code></td>
+      <td><AddrRef sym="_CbSentence" /></td>
+      <td>2 words</td>
+      <td>
+        The wrapper that introduces a message. <code>u16[2]</code> = flags, <code>u16[4]</code> =
+        glyph count. The sentence's own token stream starts at <code>cmd+6</code> and runs to its
+        terminator.<br />
+        The callback calls <code>SetSprtOutput(glyph_count, …)</code> to reserve that many sprites,
+        <code>SetDefaultTextParam</code> to reset style, then
+        <code>CTextMessage::TextOut(cmd+6, …)</code> to render into a fresh slot, and returns
+        <code>0x802</code> to retire the driver pass.<br />
+        <b>Flags:</b> if <code>flags &amp; 3</code> is non-zero the callback first runs a measuring
+        pass over the stream and <i>back-patches the X field of every <code>04 20</code> record</i>
+        with <code>-(line_width / 2)</code> — the engine can auto-centre in place. In all observed
+        field dialogue the flags are <code>0</code> and the coordinates are pre-computed instead.
+      </td>
+    </tr>
+    <tr data-k="proper name substitution player">
+      <td><code>0x26</code></td>
+      <td><code>0F 6x</code></td>
+      <td><AddrRef sym="_CbProper" /></td>
+      <td>see note</td>
+      <td>
+        Proper-noun substitution. On first encounter it calls
+        <code>CTalk::SetProper(u16*, const RMFCOMMAND*)</code> to expand a name into the scratch
+        buffer at <code>this+0xC8</code>, appends a zero-payload <code>0F 6x</code> terminator,
+        saves the resume address in <code>this+0xC4</code> and redirects the stream pointer into the
+        buffer. The terminator hits the same callback, which restores the saved pointer. Returns
+        <code>0x200</code> both times ("I moved the stream pointer myself").<br />
+        <b>Sizing exception:</b> this is the one record whose length uses the <i>whole</i> second
+        byte, not the high nibble — the payload is <code>2 * cmd[1]</code> bytes.
+      </td>
+    </tr>
+    <tr data-k="jump prologue firstcodeprocess scene setup">
+      <td><code>0x27</code></td>
+      <td><code>0F 7x</code></td>
+      <td><AddrRef sym="_CbJump" /></td>
+      <td>up to 7 words</td>
+      <td>
+        Reads <code>u8[2]</code> plus up to six more words at <code>+4</code>, <code>+6</code>,
+        <code>+8</code>, <code>+0xA</code>, <code>+0xC</code>, <code>+0xE</code>.<br />
+        Special role: <AddrRef sym="FirstCodeProcess" label="CTalk::FirstCodeProcess(u16*)" /> loops
+        over <i>leading</i> <code>0F 7x</code> records at the head of a packet and executes them
+        before any rendering starts, returning the first non-<code>0F 7x</code> token. So
+        <code>Jump</code> is effectively the packet prologue — scene setup that must run before the
+        first sentence.
+      </td>
+    </tr>
+    <tr data-k="playse voice sound lipsync channel">
+      <td><code>0x28</code></td>
+      <td><code>0F 28</code></td>
+      <td><AddrRef sym="_CbPlaySe" /></td>
+      <td>2 words</td>
+      <td>
+        <code>u8[2]</code> = channel, <code>u16[4]</code> = sound id.<br />
+        If the channel byte is <code>≥ 0x10</code> it is treated as signed
+        (<code>slot -= 0x20</code>). The value <code>0x1F</code> therefore means <code>-1</code> =
+        "allocate a channel automatically", which additionally binds the playing handle to the
+        current bustup so lip-sync follows the clip. <code>0x1F</code> is what voiced dialogue uses
+        throughout.<br />
+        Suppressed entirely when the global sound-disable flag is set.
+      </td>
+    </tr>
+    <tr class="dim" data-k="err assertion trap unused">
+      <td><code>0x29</code>–<code>0x2F</code></td>
+      <td><code>0F 9x</code>–<code>0F Fx</code></td>
+      <td><AddrRef sym="_CbErr" /></td>
+      <td>—</td>
+      <td>Assertion trap. Seven unused subcommands.</td>
+    </tr>
+  </tbody>
+</table>
+</FilterTable>
+
+## 8. Callback return flags
+
+Every callback returns a value through `this+0x1E0`. `PutText` reads it as a
+bitfield — the low byte is a state, the high bits are directives. This is what
+makes constructs like `_CbProper` and `_CbSentence` possible.
+<Tag kind="confirmed" /> from the loop tail at `0x002D5CF8`.
+
+| Value | Name | Effect on `PutText` |
+|---|---|---|
+| low byte = 0 | continue | Keep walking the stream (subject to the typewriter budget). |
+| low byte = 1 | pause | Stop for this frame; refund `0x100` of typewriter budget. |
+| low byte = 2 | end | Finish this text run. Clears the stream pointer. |
+| `0x100` | slot_gone | Do not write the pen position back — the block is being freed. |
+| `0x200` | ptr_owned | The callback already advanced the stream pointer; do not add `(payload+1)*2`. |
+| `0x400` | handled | Skip the renderer's own jump-table handler for this record. |
+| `0x800` | release | With state `2`: also free the sprite lists, the style block and the `_MES_DATA` itself. |
+| `0xFF` | error | Triggers an assertion and aborts the run. |
+
+Observed combinations: `_CbSentence` returns `0x802`, `_CbProper` returns
+`0x200`, `_CbEnd` returns `2`, and everything else returns `0`.

@@ -1,0 +1,112 @@
+---
+title: Filesystem and the TOC
+description: >-
+  MakeFileSystem — how the table of contents address is derived, read as raw
+  sectors, descrambled in place, and resolved into LBAs, sizes and IDs.
+sidebar:
+  label: 7–8 · Filesystem and TOC
+  order: 5
+---
+
+import Tag from '../../../components/Tag.astro';
+
+## 7. MakeFileSystem: TOC address derivation, read, and descramble
+
+<Tag kind="confirmed" />, cross-validated against working reference code, the
+boot log, and used in a custom disk rebuild proof-of-concept. The `0x00078D83`
+constant is a hardcoded reference to the TOC address.
+
+### 7.2 Gate and disc read
+
+```asm
+if storage[+0xD99B] != 0:
+    return SUCCESS
+
+sceCdDiskReady(0)
+CStorage::Open(storage, index=0)      ; -> SIF SearchFile
+buf = operator_new(0xD800)
+CStorage::Read(storage, buf, size=0xD800)
+```
+
+<Tag kind="confirmed" /> — this read is issued as a raw/extended `DvdRead` (not
+the standard `CDRead` used for the ELF), in `2064`-byte blocks rather than
+`2048`:
+
+```asm
+DvdRead: Reading Sector 0494979 (002 Blocks of Size 2064) at Speed=4x(CAV) SpindleCtrl=83
+```
+
+`2064 = 2048 + 16` (raw sector mode, EDC bytes retained). The maths checks out:
+`27 × 2064 = 55,728`; `55,728 − (27 × 16) = 55,296 = 0xD800` — matching the
+confirmed TOC size exactly once per-sector raw overhead is stripped. This
+confirms the TOC is fetched via a distinct, lower-level raw-read path rather than
+the standard `CDRead` API used for the ELF.
+
+### 7.3 Second gate and copy
+
+```asm
+if storage[+0xD99B] != 0:
+    goto done
+memcpy(storage + 0x194, buf, 0xD800)
+```
+
+### 7.4 Descramble, in place
+
+<Tag kind="confirmed" />:
+
+```python
+def _scramble(self, flat_toc: list) -> list:
+    total = self.params.total_entries       # 0x1200 = 4608
+    key = self.params.seed                  # 0x13578642 hardcoded
+    scramble = flat_toc[:]
+    for i in range(total):
+        scramble[0 * total + i] ^= key
+        key ^= (key << 1) & 0xFFFFFFFF
+        scramble[1 * total + i] ^= key
+        key ^= (~self.params.seed) & 0xFFFFFFFF
+        scramble[2 * total + i] ^= key
+        key ^= ((key << 2) ^ self.params.seed) & 0xFFFFFFFF
+    return scramble
+```
+
+| Parameter | Value | Confirmed by |
+|---|---|---|
+| `seed` | `0x13578642` | Exact match to disassembly constant |
+| `signature` | `0x27D51556` | Raw scrambled value expected at TOC index 0 |
+| `toc_offset` | `0x3C6C1800` | Matches sector 494979, confirmed in both regional boot logs. Derived, not hardcoded. |
+| `total_entries` | `0x1200` (4608) | Exact match to disassembly loop bound |
+| `sector_size` | `0x800` (2048) | Confirms the `<<11` conversion in [§7.5](#75-toc-entry-resolution) |
+
+Three parallel planes of 4608 32-bit words each:
+
+| Plane | Struct offset | Contents |
+|---|---|---|
+| 0 | `storage + 0x194` | LBA |
+| 1 | `storage + 0x4994` | Sizes |
+| 2 | `storage + 0x9194` | IDs |
+
+### 7.5 TOC entry resolution
+
+<Tag kind="confirmed" /> — semaphore-guarded (`storage[+0x18]`). Both offset and
+size fields are packed as `[bits 31-24: reserved][bits 23-0: value]`.
+
+```asm
+if index == 0: return NOT_FOUND
+resolved_LBA = LBA_plane[index] & 0x00FFFFFF
+storage[+0x54] = resolved_LBA          ; used as-is -- inferred
+
+if storage[+0xD99D] == 0: return
+raw_id = ids_plane[index]
+if raw_id == 0: return NOT_FOUND
+storage[+0x58] = raw_id - 1
+
+resolved_size = (sizes_plane[index] & 0x00FFFFFF) << 11   ; sectors -> bytes
+storage[+0x80] = resolved_size
+```
+
+Confirmed sentinels: index 0 is always reserved, and `ids_plane[index] == 0`
+marks an empty slot.
+
+## 8. Overlays
+
+<Tag kind="confirmed" /> — overlay entries are marked as logical ID 0 in the TOC.

@@ -1,0 +1,68 @@
+---
+title: Method and conventions
+description: >-
+  Which builds these documents cover, what the confirmed and inferred markers
+  mean, and how addresses are cited.
+sidebar:
+  label: Method and conventions
+---
+
+import Tag from '../../components/Tag.astro';
+
+## Evidence markers
+
+Every non-obvious claim in these documents carries one of two markers. They are
+not decoration — the difference between them is the difference between something
+you can build a tool on and something you should re-check first.
+
+<Tag kind="confirmed" /> means one of: read directly out of MIPS disassembly;
+reproduced byte-for-byte against real data pulled from a disc image or a
+decompressed payload; or observed in a PCSX2 boot log. Where a claim was reached
+two independent ways, the documents say so.
+
+<Tag kind="inferred" /> means the surrounding code strongly implies it, or it is
+consistent across everything observed, but nothing has proven it. Inferred claims
+are the ones most likely to be wrong, and they are marked so they can be revisited
+without re-deriving the confirmed material around them.
+
+Anything that is neither is an open question, and the open questions are written
+down rather than left out. Corrections are made in place: where an earlier
+reading turned out to be wrong, the document says what it used to claim and what
+disproved it.
+
+## Builds
+
+| Build | Identifier | Notes |
+|---|---|---|
+| Debug (proto) | `SLUS-21262` | The prototype. Retains assertions, a full linker map and debug-only overlays such as `RmfChecker.bin`, which makes it the primary source for structure and naming. |
+| USA release | `SLUS-21262` | Retail. |
+| Japanese release | `SLPM-65800` | Retail. Its symbol map is derived rather than complete, so some functions had to be located structurally. |
+
+Both release builds share the same `main` ELF; the prototype's differs. All three
+have identical IOP kernel images and identical custom ELFs.
+
+## Addresses
+
+Addresses are runtime EE virtual addresses, not file offsets. For the RMF path
+every symbol lives in the `step0_00.bin` overlay, whose base vaddr is
+`0x001B4280` in the debug build and `0x001A2380` in both releases.
+
+Symbol names shown in a dotted underline — like
+`_CbSentence` in the command tables — can be clicked to see that symbol's address
+in all three builds. Those values come from a single source file, which also
+generates the full table in
+[§16 Symbol reference](/docs/rmf/reference/#16-symbol-reference), so the popups
+and the table cannot disagree.
+
+Where the Japanese map omits a function, the address was recovered structurally
+(anchoring on a known neighbour, matching a record shape, or walking back to the
+`addiu $sp, $sp, -N` prologue) and the method was validated against builds where
+the answer was already known. That process is described in
+[§14.1](/docs/rmf/reference/#141-how-the-japanese-addresses-were-recovered).
+
+## Assistance
+
+Parts of these documents were drafted with Claude's assistance from
+disassembly, boot logs and payload dumps. The evidence markers apply regardless
+of how a passage was written: confirmed means someone verified it against the
+artefacts, not that a model asserted it.

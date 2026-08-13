@@ -1,0 +1,143 @@
+---
+/**
+ * The full EVD opcode reference, rendered from src/data/evd-commands.ts.
+ *
+ * Each opcode's handler address in both builds is behind the same click-to-show
+ * popup used everywhere else on the site.
+ */
+import { EVD_COMMANDS, EVD_FAMILIES } from '../data/evd-commands';
+import { evdName } from '../data/evd-names';
+import AddrRef from './AddrRef.astro';
+import FilterTable from './FilterTable.astro';
+
+/** Split on backticks so `like this` renders as code. */
+function segments(text: string) {
+  return text.split('`').map((part, i) => ({ code: i % 2 === 1, text: part }));
+}
+
+const grouped = EVD_FAMILIES.map((family) => ({
+  family,
+  entries: EVD_COMMANDS.filter((c) => c.family === family),
+})).filter((g) => g.entries.length > 0);
+---
+
+<FilterTable noun="opcodes" placeholder="Filter by opcode, name, handler or behaviour…">
+  <div class="evd-table">
+    <table>
+      <thead>
+        <tr>
+          <th class="evd-table__op">Opcode</th>
+          <th class="evd-table__name">Command</th>
+          <th class="evd-table__ev">Evidence</th>
+          <th>Handler behaviour</th>
+        </tr>
+      </thead>
+      <tbody>
+        {
+          grouped.map(({ family, entries }) => (
+            <>
+              <tr class="evd-table__group">
+                <td colspan="4">{family}</td>
+              </tr>
+              {entries.map((c) => (
+                <tr
+                  class:list={{ dim: c.evidence === 'traced' }}
+                  data-k={[
+                    c.opcode,
+                    c.key,
+                    c.label,
+                    c.family,
+                    ...c.engineNames,
+                    ...c.formNames,
+                    ...c.calls,
+                  ].join(' ')}
+                >
+                  <td class="evd-table__op">
+                    <AddrRef
+                      label={c.opcode}
+                      title={c.handler}
+                      rows={[
+                        { label: 'Debug', detail: 'SLUS-21262 prototype', addr: c.debug ?? '' },
+                        { label: 'ENG', detail: 'USA release', addr: c.eng ?? '' },
+                        { label: 'JPN', detail: 'SLPM-65800 release', addr: c.jpn ?? '' },
+                      ]}
+                    />
+                  </td>
+                  <td class="evd-table__name">
+                    <a href={`../commands/${c.hex}/`}>{evdName(c)}</a>
+                    {c.engineNames.length + c.formNames.length > 1 && (
+                      <span class="evd-table__alt">
+                        {' '}
+                        +{c.engineNames.length + c.formNames.length - 1}
+                      </span>
+                    )}
+                  </td>
+                  <td class="evd-table__ev">
+                    <span class:list={['ev', `ev--${c.evidence}`]}>{c.evidence}</span>
+                  </td>
+                  <td>
+                    {segments(c.behavior).map((seg) =>
+                      seg.code ? <code>{seg.text}</code> : seg.text
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </>
+          ))
+        }
+      </tbody>
+    </table>
+  </div>
+</FilterTable>
+
+<style>
+  .evd-table {
+    overflow-x: auto;
+  }
+  .evd-table table {
+    margin-block: 0;
+  }
+  .evd-table__op,
+  .evd-table__ev {
+    white-space: nowrap;
+  }
+  .evd-table__name a {
+    font-family: var(--sl-font-mono);
+    font-size: var(--sl-text-code-sm);
+    color: var(--rs-peach);
+    white-space: nowrap;
+  }
+  .evd-table__alt {
+    color: var(--sl-color-gray-4);
+    font-size: var(--sl-text-xs);
+  }
+  .evd-table__group td {
+    background: var(--sl-color-gray-6);
+    color: var(--sl-color-text-accent);
+    font-weight: 700;
+    border-bottom: 2px solid var(--sl-color-accent);
+  }
+  .evd-table__none {
+    color: var(--sl-color-gray-4);
+  }
+  .ev {
+    font-family: var(--sl-font-mono);
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0 0.4em;
+    border-radius: 0.2rem;
+    white-space: nowrap;
+  }
+  .ev--proven {
+    color: var(--rs-green);
+    background: color-mix(in srgb, var(--rs-green) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--rs-green) 40%, transparent);
+  }
+  .ev--traced {
+    color: var(--rs-peach);
+    background: color-mix(in srgb, var(--rs-peach) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--rs-peach) 40%, transparent);
+  }
+</style>

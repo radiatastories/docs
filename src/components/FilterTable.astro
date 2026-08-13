@@ -1,0 +1,129 @@
+---
+/**
+ * Wraps a table with a live text filter over its body rows — the behaviour
+ * the standalone RMF and EVD pages had before this site existed.
+ *
+ * Rows whose text does not contain every whitespace-separated term are
+ * hidden. Rows marked `data-group` (section headers) stay visible only
+ * while at least one row under them is.
+ */
+interface Props {
+  placeholder?: string;
+  /** Plural noun for the tally, e.g. "commands". */
+  noun?: string;
+}
+
+const { placeholder = 'Filter…', noun = 'rows' } = Astro.props;
+---
+
+<div class="filter-table" data-noun={noun}>
+  <div class="filter-table__bar">
+    <input
+      type="search"
+      class="filter-table__input"
+      placeholder={placeholder}
+      aria-label={placeholder}
+      autocomplete="off"
+      spellcheck="false"
+    />
+    <span class="filter-table__tally" aria-live="polite"></span>
+  </div>
+  <slot />
+</div>
+
+<style>
+  .filter-table__bar {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 0.75rem;
+  }
+  .filter-table__input {
+    flex: 1 1 18rem;
+    max-width: 26rem;
+    background: var(--sl-color-black);
+    color: var(--sl-color-white);
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.35rem;
+    padding: 0.35rem 0.6rem;
+    font: inherit;
+    font-size: var(--sl-text-sm);
+  }
+  .filter-table__input:focus {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: -1px;
+  }
+  .filter-table__tally {
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-xs);
+    font-variant-numeric: tabular-nums;
+  }
+  .filter-table :global(tr.is-filtered) {
+    display: none;
+  }
+</style>
+
+<script>
+  document.querySelectorAll<HTMLElement>('.filter-table').forEach((root) => {
+    const input = root.querySelector<HTMLInputElement>('.filter-table__input');
+    const tally = root.querySelector<HTMLElement>('.filter-table__tally');
+    const body = root.querySelector('tbody');
+    if (!input || !body) return;
+
+    const noun = root.dataset.noun ?? 'rows';
+    const rows = Array.from(body.querySelectorAll<HTMLTableRowElement>('tr'));
+    // A row is a group header when its only cell spans the whole table.
+    const isHeader = (tr: HTMLTableRowElement) =>
+      tr.cells.length === 1 && tr.cells[0]!.hasAttribute('colspan');
+
+    // A row matches on its visible text plus any extra aliases the author put
+    // in data-k ("gaze", "lipsync", …), so searches find rows by concept and
+    // not only by the exact wording of the description.
+    const haystacks = new Map(
+      rows.map((tr) => [
+        tr,
+        `${tr.textContent ?? ''} ${tr.dataset.k ?? ''}`.toLowerCase(),
+      ])
+    );
+    const total = rows.filter((tr) => !isHeader(tr)).length;
+
+    function apply() {
+      const terms = input!.value.toLowerCase().split(/\s+/).filter(Boolean);
+      let shown = 0;
+
+      // Pass 1: data rows.
+      for (const tr of rows) {
+        if (isHeader(tr)) continue;
+        const hay = haystacks.get(tr) ?? '';
+        const hit = terms.every((t) => hay.includes(t));
+        tr.classList.toggle('is-filtered', !hit);
+        if (hit) shown++;
+      }
+
+      // Pass 2: a header survives only if something follows it before the
+      // next header.
+      for (let i = 0; i < rows.length; i++) {
+        const tr = rows[i]!;
+        if (!isHeader(tr)) continue;
+        let any = false;
+        for (let j = i + 1; j < rows.length && !isHeader(rows[j]!); j++) {
+          if (!rows[j]!.classList.contains('is-filtered')) {
+            any = true;
+            break;
+          }
+        }
+        tr.classList.toggle('is-filtered', !any);
+      }
+
+      if (tally) {
+        tally.textContent = terms.length
+          ? `${shown} of ${total} ${noun}`
+          : `${total} ${noun}`;
+      }
+    }
+
+    input.addEventListener('input', apply);
+    apply();
+  });
+</script>

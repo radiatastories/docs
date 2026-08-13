@@ -1,0 +1,245 @@
+---
+title: Layout and glyph data
+description: >-
+  The region-specific text metrics an RMF reader has to get right, how ruby is
+  composed out of the generic style stack, and the glyph tiles a file can carry
+  for characters the resident font does not have.
+sidebar:
+  label: 11–13 · Layout and glyphs
+  order: 5
+---
+
+import Tag from '../../../components/Tag.astro';
+import AddrRef from '../../../components/AddrRef.astro';
+
+## 11. Layout mathematics
+
+:::caution[Text metrics are region-specific]
+The glyph cell, the text speed, the line spacing and the name-plate offset all
+take different values in Japanese files. These are **authored data**, not engine
+constants — the same `03 20` and `04 20` records carry them in both regions — but
+a reader that assumes the English numbers will mis-measure every Japanese line.
+:::
+
+### 11.1 Glyph cell and text speed
+
+Every dialogue message opens with a `03 20` dimensions record and a `07 1x` speed
+record. Across a full English packet file and a full Japanese one, each is
+completely uniform within its region and differs between them
+<Tag kind="confirmed" />:
+
+| Region | `03 20` payload | Cell (U8.8) | `07 10` payload | Speed |
+|---|---|---|---|---|
+| English | `33 0B 66 16` | `11.20 × 22.40` | `00 03` / `00 04` | `3.00`, then `4.00` |
+| Japanese | `66 0E 00 10` | `14.40 × 16.00` | `00 07` | `7.00` |
+
+The Japanese cell is wider and much shorter — nearly square, as full-width kana
+and kanji need — where the English cell is narrow and tall. Note also that the
+trailing `33` and `66` bytes in the English payload are just the fractional parts
+of `11.20` and `22.40`; they are not fixed markers, and the Japanese payload uses
+`66` and `00`.
+
+The renderer derives its advances from that cell:
+
+```asm
+full_advance = (width  * 32) >> 12      ; one whole cell
+line_height  = (height * 32) >> 12
+space_narrow = (width  * 12) >> 12      ; English builds only
+```
+
+| Region | `full_advance` | `line_height` | Space command `01 00` advances by |
+|---|---|---|---|
+| English | `22` | `44` | `8` |
+| Japanese | `28` | `32` | `28` |
+
+That last column is a genuine engine difference rather than a data one, and it is
+visible in the jump-table handlers
+([§6](../commands/#6-layer-a-text-engine-commands)): the English builds compute
+the extra `* 12 >> 12` term and use it for the space command, so a space is about
+three quarters of a cell. The Japanese build never computes that term at all —
+its space handler advances by `full_advance`, so a space occupies one whole
+character cell, which is what Japanese typesetting expects. <Tag kind="confirmed" />
+
+### 11.2 Vertical placement
+
+Line Y coordinates come from the `04 20` records, one per line, and the
+name-plate offset from `u16[6]` of the `0E 4E` record. Observed values
+<Tag kind="confirmed" />:
+
+| Lines | English Y | English plate | Japanese Y | Japanese plate |
+|---|---|---|---|---|
+| 1 | `190` | `118` | `184` | `88` |
+| 2 | `168, 208` | `96` | `168, 216` | `88` |
+| 3 | `136, 176, 216` | `64` | not observed | not observed |
+
+Two differences fall out. **Line spacing is 48 in Japanese and 40 in English**,
+and the **Japanese name plate sits at a fixed 88** for both line counts seen,
+where the English plate tracks the first line at `first_y - 72`. No three-line
+Japanese message appears in the sample examined, so the Japanese column stops at
+two.
+
+The English series is a clean fit <Tag kind="inferred" />:
+
+```asm
+n        = number_of_lines            ; 1, 2 or 3
+first_y  = -5*n^2 - 7*n + 202
+y(i)     = first_y + i * 40
+plate_y  = first_y - 72
+```
+
+Two Japanese data points are not enough to fit a curve, so the observed values
+above should be used literally rather than extrapolated.
+
+### 11.3 Horizontal centring
+
+The advance is not a flat ratio — it scales with the cell, and it truncates per
+glyph. <AddrRef sym="_CbSentence" />'s measuring pass computes, for each glyph
+<Tag kind="confirmed" />:
+
+```asm
+003164C8  andi  $v0, $s2, 0xffff     ; s2 = dimensions width word
+003164D0  mult  $v1, $v0, $v1        ; width_word * spacing_byte
+003164DC  sra   $v0, $v1, 0xc        ; >> 12, truncated per glyph
+003164E4  addu  $s3, $s3, $v0        ; pen_x += advance
+```
+
+```asm
+advance(c) = (width_word * spacing[c]) >> 12
+line_width = sum(advance(c) for c in visible_text)
+x          = -(line_width // 2)
+```
+
+`spacing[c]` comes from a per-glyph width table selected by text style and
+attribute bits, and **defaults to `0x20` when the font carries no table**. That
+default is exactly why Japanese is monospaced: it has no width table, so every
+glyph advances `(0x0E66 * 32) >> 12 = 28`. Measured across a Japanese file the
+advance is 28.00 px per character on every line, without exception.
+
+| Region | `width_word` | Advance | Reproduces the stored X |
+|---|---|---|---|
+| English | `0x0B33` | proportional, spacing 10–30 | `53 / 56` lines |
+| Japanese | `0x0E66` | uniform 28 px | `20 / 20` lines |
+
+The three English lines that do not match all belong to one message, and that
+same message also declares a glyph count of 48 where it draws 74. A file that is
+internally inconsistent in two ways at once looks edited by tooling carrying
+these very bugs rather than authored that way, so it is weak evidence about the
+format. A flat `spacing × 2/3` approximation, which is what the older tooling
+used, happens to land within a pixel or two for English because
+`2867/4096 = 0.700` against `0.667` is largely cancelled by the per-glyph
+truncation. It is badly wrong for any other cell size.
+
+Each line carries its own `04 20` record, so a three-line box holds three
+independently centred X values. The alternative is to let the engine do it:
+setting `flags & 3` in the `0F 25` header makes `_CbSentence` measure each line
+and overwrite these X fields itself
+([§7](../commands/#7-layer-b-ctalk-command-dispatch)). Neither sample file uses
+that path — every `0F 25` in both carries `flags = 0`.
+
+## 12. Ruby and furigana
+
+There is no ruby opcode. Ruby is a composition built on the generic style stack
+([§6.1](../commands/#61-the-09-save-and-restore-mask)): save the style, shrink
+the glyphs, jump to an absolute position above the baseline, draw the
+annotation, then restore. The full sequence is:
+
+```asm
+09 10 BC 00              ; StyleSave: pen X/Y, width, height, speed
+03 20 33 04 66 0F        ; Dimensions -> 4.20 x 15.40  (vs 11.20 x 22.40 body)
+04 20 <x> <y>            ; Position: centred over the base run, y - 28
+02 20 6A 69 5F 80        ; Colour, matching the base text
+07 10 00 00              ; TextSpeed 0 -> annotation appears instantly
+<annotation glyphs>
+09 11 BC 00              ; StyleRestore: same mask
+<base text glyphs>
+```
+
+The annotation is emitted *before* the base text and positioned absolutely, so
+the base run's own advance is unaffected. Ruby X is
+`base_center - annotation_width / 2`, with the annotation measured at a scale of
+`4/11` to match its reduced cell width, and Y is `line_y - 28`.
+
+:::note
+Because the mask is a parameter, the same mechanism supports any scoped style
+change — a `09 10` with mask `0x03` would push only the colours, for instance.
+The `BC 00` payload is specific to ruby, not a fixed constant of the format.
+:::
+
+## 13. Embedded glyph data
+
+A file may append glyphs of its own after its packets, for characters the
+resident font does not have. Two sections can follow the packet data, in this
+order:
+
+| Section | Starts at | Size | Contents |
+|---|---|---|---|
+| glyph tiles | `packet_data_size` | `glyph_data_size` | 32×32 tiles at 4 bits per pixel, 512 bytes each, stacked in order. The size is always a whole multiple of 512. |
+| glyph widths | `packet_data_size + glyph_data_size` | `ceil(tiles/4)*4` | One advance-width byte per tile, rounded up to a 4-byte boundary. Present in the English files examined, absent from the Japanese ones. <Tag kind="confirmed" /> |
+
+:::caution[This is not a Japanese-only feature]
+An earlier reading of this document said it was, on the evidence that
+`glyph_data_size` was `0` in every English file then available. An English file
+carrying 67 embedded glyphs disproves that. Both regions use the mechanism; what
+differs is that the English file also carries a width table
+([§14](../reference/#14-regional-differences)).
+:::
+
+### 13.1 Tile addressing
+
+Tile *i* is addressed by the character word `0x8010 + i`. Reading that back
+through [§5](../token-stream/#5-glyph-words): `b1 = 0x80` sets the attribute bit
+and leaves the page at `0`, and `b0 = 0x10 + i` is the slot. So the `0x80`
+attribute bit is what selects the file's own glyph block instead of the resident
+font.
+
+Both payload files agree, exactly and independently <Tag kind="confirmed" />:
+
+| File | `glyph_data_size` | Tiles | Distinct `0x80` words | Range | Unreferenced |
+|---|---|---|---|---|---|
+| English dialogue | `34304` | `67` | `67` | `0x8010`–`0x8052` | `0` |
+| Japanese dialogue | `4608` | `9` | `8` | `0x8010`–`0x8017` | `1` |
+| Japanese save names | `9728` | `19` | — | — | — |
+
+The English case is the strongest: 67 tiles, 67 distinct glyph words, contiguous
+from the base, none unreferenced and none pointing past the block.
+
+### 13.2 Decoding the tiles
+
+```python
+p0     = byte & 0x0F                  # low nibble first
+p1     = (byte >> 4) & 0x0F
+pixel  = nibble * 17                  # expand 4-bit to 8-bit grey
+tiles  = reshape(pixels, (h, 32))     # 32 x 32 tiles, stacked vertically
+```
+
+The nibble histogram of a real block is strongly bimodal at `0` and `15` with
+populated mid-tones, which is what antialiased glyph coverage looks like and is
+not what packet data or padding looks like.
+
+### 13.3 The width table
+
+In the English file, 68 bytes follow the tile block for its 67 tiles. Every value
+lies between 27 and 30, and 58 of the 67 are exactly 30.
+
+:::note[One byte per glyph, padded to four]
+A second file settles a shape that one sample could not. It carries **2 tiles and
+a 4-byte table**, `1e 1e 00 00` — two advance widths followed by two bytes of
+padding. "One byte per tile plus a `00` terminator" would give 3 bytes here, so
+that reading is out; the table is **one byte per tile rounded up to a 4-byte
+boundary**. The 67-tile file's 68-byte table fits both rules, which is why it
+could not decide the question on its own. <Tag kind="confirmed" />
+
+Nothing needs to infer it in practice: header `[0x08]` gives the tile block size
+outright, so the table boundary is exact whenever the header is at hand.
+:::
+
+Those are advance widths in the same units the resident font uses. The resident
+English spacing table runs 10–30, its single most common value is 30, and its
+next three are 29, 28 and 27 — the same top of the range, in the same order. The
+embedded glyphs are wide characters, so they cluster at the maximum.
+<Tag kind="inferred" />
+
+That the Japanese files have no such table fits: their glyphs are full-width and
+uniform, so there is nothing per-glyph to record. It also explains why the
+Japanese header can omit `glyph_data_end` — with no section after the tiles,
+`[0x0C] + [0x08]` is simply end-of-file.

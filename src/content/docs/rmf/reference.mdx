@@ -1,0 +1,127 @@
+---
+title: Regions and symbol reference
+description: >-
+  Every difference found between the Japanese and English RMF paths, what was
+  checked and found identical, the open questions, and per-build addresses for
+  the whole code path.
+sidebar:
+  label: 14–16 · Regions and symbols
+  order: 6
+---
+
+import Tag from '../../../components/Tag.astro';
+import SymbolTable from '../../../components/SymbolTable.astro';
+
+## 14. Regional differences
+
+The Japanese executable was compared against the debug build function by function
+across the whole RMF path. The result is narrow: **the container header differs,
+and the rest of the format does not**. The differences found are below;
+everything in the "unchanged" list after them was checked rather than assumed.
+
+| Difference | Japanese | English | Status |
+|---|---|---|---|
+| Packet offset table | Starts at `0x14`. Header is `0x14` bytes. | Starts at `0x18`. Header is `0x18` bytes, with an extra `glyph_data_end` `u32` at `0x14`. | <Tag kind="confirmed" /> |
+| Header `+0x08` | Size of the embedded glyph tile block. | `0` in every file examined; no payload is ever carried. | <Tag kind="inferred" /> |
+| How total size is expressed | Not stored. A reader adds `[0x0C] + [0x08]`. | Stored at `[0x14]`. The underlying identity `[0x0C] + [0x08] = size` is the same in both regions ([§2](../container/#2-file-header)). | <Tag kind="confirmed" /> |
+| Character code packing | Two style bytes packed into the composed code: `+0x0D` at bits 16–23, `+0x0C` at bits 24+. | One style byte, `+0x0C` at bits 16+; `+0x0D` is read separately. | <Tag kind="confirmed" /> |
+| End handler extents | Command `0x00` stores the running *maximum* width into `+0x1C` and assigns `+0x1E`. | Command `0x00` *accumulates* into both `+0x1C` and `+0x1E`. | <Tag kind="confirmed" /> |
+| Space advance | Command `0x01` advances by the full cell, `(width * 32) >> 12`. The narrow term is never computed. | Command `0x01` advances by `(width * 12) >> 12`, about three quarters of a cell. | <Tag kind="confirmed" /> |
+| Glyph cell | `14.40 × 16.00` — wider, much shorter, near square. | `11.20 × 22.40` — narrow and tall. | <Tag kind="confirmed" /> |
+| Text speed | `7.00` throughout. | `3.00`, raised to `4.00` for the body text. | <Tag kind="confirmed" /> |
+| Line spacing | `48`. One line at `Y=184`, two at `168, 216`. | `40`. One line at `Y=190`, two at `168, 208`, three at `136, 176, 216`. | <Tag kind="confirmed" /> |
+| Name plate offset | Fixed at `88` for both line counts observed. | Tracks the text: `first_y - 72`, so `118 / 96 / 64`. | <Tag kind="confirmed" /> |
+| Glyph width table | Not present. `[0x0C] + [0x08]` lands exactly on end-of-file, so the tiles are the last section. | Present when the file embeds glyphs: one advance-width byte per tile, padded to a 4-byte boundary, after the tiles ([§13](../layout/#13-embedded-glyph-data)). | <Tag kind="inferred" /> |
+
+The last five rows are differences in **authored data** rather than in engine
+code: the same records carry them, and either build would render either set of
+values. They matter because a reader that assumes the English numbers will
+mis-measure every Japanese line. The first four rows are genuine code
+differences.
+
+Verified **identical** between the two builds:
+
+- **Packet layout.** `RmfStartSimple` computes
+  `stream = packet + 8 + speaker_count * 4` from the same two header words in
+  both.
+- **Record size rule.** `WriteCommand` splices `payload_words << 4` into byte 1
+  and returns `dst + 2 + payload*2` in both.
+- **Dispatch.** `TextCallBackCommand` uses the same `0x0E → 0x10+N` /
+  `0x0F → 0x20+N` rules and the same `index * 12` stride.
+- **The 48-entry table.** Dumped from both static initializers: the same
+  callbacks in the same slots, the same `_CbNop` and `_CbErr` fill pattern, no
+  additions or removals.
+- **Every command's field offsets.** `_CbSentence` (flags `+2`, glyph count `+4`,
+  text at `+6`, the `& 3` auto-centre test), `_CbNameWindow` (`+2`, `+4`, `+6`,
+  `+8`), `_CbJump` (`+2` and six words through `+0xE`), `_CbPlaySe` (including
+  the `≥ 0x10 → slot - 0x20` sign trick), `_CbWaitTime`, `_CbWaitSelect`,
+  `_CbWaitSelect2`, `_CbSpeaker`, `_CbFace`, `_CbSignal`, `_CbProhibitSkip` —
+  all read the same bytes.
+- **`_CbProper`.** Same scratch buffer at `+0xC8`, same resume pointer at `+0xC4`,
+  same whole-second-byte length exception, same `0x200` return.
+- **The `PutText` jump table** and all eleven handlers, including the `0x06` /
+  `0x08` shared skip target, the colour word order, the U8.8 dimensions and
+  speed, the `% 3` text style, and the `09` mask semantics.
+- **Callback return flags** `0x100` / `0x200` / `0x400` / `0x800` and the `0xFF`
+  error path.
+- **Glyph index maths.** `(b0 - 0x10) + (b1 & 0x3F) * 240`, with `b1 & 0xC0` to
+  bits 14–15, in both.
+
+Two build-flavour artefacts are worth knowing when reading addresses rather than
+the format: the Japanese executable is a retail build, so `_CbErr` collapses to a
+`0x10`-byte stub instead of the debug build's `0x6C`-byte assertion, and its
+resident glyph cache is walked with a different geometry. Neither changes a
+single byte of stream data.
+
+### 14.1 How the Japanese addresses were recovered
+
+The Japanese symbol map is a derived map whose confirmation policy omits any
+function whose body does not match the reference build, so `PutText`,
+`WriteCommand`, `_CbSentence` and the command table are all absent from it. They
+were located structurally instead: the 48-entry table by anchoring on `_CbEnd`,
+whose address the map does give, and searching backwards for the
+`{ 0, 0xFFFFFFFF, addr, 0 }` record shape; the `PutText` jump table by its
+signature of eleven in-range targets in which entries `0x06` and `0x08` share a
+target; and function starts by walking back to the `addiu $sp, $sp, -N` prologue.
+
+The method was validated by running it against the debug build, where it
+reproduced `RmfStartSimple`, `RmfStart`, `RmfExit`, `PutText` and `GetCharaNo` at
+exactly the addresses the full linker map lists, and against the English release,
+where every recovered callback matched the seven `_Cb*` rows its map does
+contain. Per-build addresses are in [§16](#16-symbol-reference).
+
+## 15. Open questions
+
+- The `0F 7x` `_CbJump` payload words at `+4` through `+0xE` are read but their
+  individual meanings are not established. Given `FirstCodeProcess`, they are
+  most likely background, camera and cast setup for the packet.
+- `_CbBupDirection` and `_CbBupPosition` are byte-identical stubs in the debug
+  build; whether the retail build differs has not been checked.
+- The exact meaning of the three `05` text styles.
+- The `0x40` character attribute bit. It occurs in both regions and always
+  sparsely — 4 glyphs in the Japanese dialogue file, 22 in the English one —
+  which is too few to infer a purpose from context.
+- Whether Japanese three-line messages follow the English quadratic for line Y
+  and plate offset. The sample examined contains only one- and two-line messages,
+  and its plate offset is constant where the English one varies, so the English
+  formula cannot simply be carried over.
+- Header `+0x04` (`0xCE`) is present in every file, both regions, but no code
+  that reads it has been found.
+- The engine code path that consumes the glyph tile block and its width table has
+  not been located, so nothing is known about when the data is uploaded or how
+  long it is kept.
+- Whether a Japanese file ever carries a glyph width table. None of the three
+  examined does, which fits full-width glyphs needing no per-glyph advance, but
+  that is one sample of a behaviour rather than a rule.
+
+## 16. Symbol reference
+
+Click any symbol for its runtime EE virtual address in all three builds:
+**Debug** is the `SLUS-21262` prototype, **ENG** the USA release, **JPN** the
+`SLPM-65800` release. Every row is in `step0_00.bin`, whose overlay base is
+`0x001B4280` in the debug build and `0x001A2380` in both releases.
+
+<SymbolTable />
+
+`RmfChecker.bin` is a 256-byte stub in both release builds, so the checker rows
+have no release counterpart.

@@ -1,0 +1,202 @@
+/* ============================================================================
+   Radiata Stories docs — theme
+   ----------------------------------------------------------------------------
+   Dark is the palette the standalone RMF/EVD pages already used (a bluer
+   Catppuccin Mocha). Light is its Latte counterpart, added because Starlight
+   ships a theme toggle and half of dark-only CSS is unreadable in it.
+
+   --rs-* are the accent hues the docs use semantically:
+     green  = an address or a confirmed value
+     mauve  = a symbol or function name
+     peach  = a field name, or an inferred marker
+     teal   = inline code
+   ========================================================================= */
+
+:root {
+  --sl-font: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --sl-font-mono: 'Cascadia Code', 'Cascadia Mono', Consolas, ui-monospace, monospace;
+}
+
+/* ── Dark (default) ─────────────────────────────────────────────────────── */
+:root,
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #1c2a4d;
+  --sl-color-accent: #3d6fd4;
+  --sl-color-accent-high: #b6cdfb;
+
+  --sl-color-white: #dce3f7;
+  --sl-color-gray-1: #cdd6f4;
+  --sl-color-gray-2: #b8c2e0;
+  --sl-color-gray-3: #9aa3c4;
+  --sl-color-gray-4: #6f779b;
+  --sl-color-gray-5: #3a3a5c;
+  --sl-color-gray-6: #282840;
+  --sl-color-gray-7: #21213a;
+  --sl-color-black: #1e1e2e;
+
+  --rs-green: #a6e3a1;
+  --rs-peach: #fab387;
+  --rs-red: #f38ba8;
+  --rs-yellow: #f9e2af;
+  --rs-mauve: #cba6f7;
+  --rs-teal: #94e2d5;
+  --rs-pink: #f5c2e7;
+}
+
+/* ── Light ──────────────────────────────────────────────────────────────── */
+:root[data-theme='light'] {
+  --sl-color-accent-low: #d3e0fb;
+  --sl-color-accent: #2f5fc4;
+  --sl-color-accent-high: #17305f;
+
+  --sl-color-white: #1c1e2b;
+  --sl-color-gray-1: #24273a;
+  --sl-color-gray-2: #363a52;
+  --sl-color-gray-3: #565b7d;
+  --sl-color-gray-4: #8087a8;
+  --sl-color-gray-5: #c3c8dc;
+  --sl-color-gray-6: #e5e8f2;
+  --sl-color-gray-7: #f0f2f8;
+  --sl-color-black: #ffffff;
+
+  --rs-green: #2f8a1f;
+  --rs-peach: #c2560a;
+  --rs-red: #c4102f;
+  --rs-yellow: #9a6510;
+  --rs-mauve: #7b30d8;
+  --rs-teal: #0f7a80;
+  --rs-pink: #b3308c;
+}
+
+/* ── Running prose ──────────────────────────────────────────────────────── */
+
+/* Cap the measure so lines stay readable on wide monitors, while tables,
+   code blocks and diagrams keep the full content width. */
+.sl-markdown-content p,
+.sl-markdown-content ul,
+.sl-markdown-content ol {
+  max-width: 82ch;
+}
+
+.sl-markdown-content h2 {
+  color: var(--rs-yellow);
+  border-bottom: 1px solid var(--sl-color-gray-5);
+  padding-bottom: 0.25rem;
+}
+
+.sl-markdown-content h3 {
+  color: var(--rs-teal);
+}
+
+.sl-markdown-content h4 {
+  color: var(--rs-pink);
+}
+
+/* Inline code — but not the code inside highlighted blocks, and not headings,
+   which keep their own colour. */
+.sl-markdown-content :not(pre) > code {
+  color: var(--rs-teal);
+  background: var(--sl-color-gray-6);
+  border-radius: 0.2rem;
+  padding: 0.1em 0.35em;
+}
+
+.sl-markdown-content :is(h1, h2, h3, h4, h5, h6) :not(pre) > code {
+  color: inherit;
+  font-size: 0.92em;
+}
+
+/* ── Tables ─────────────────────────────────────────────────────────────── */
+
+/* These documents are mostly tables, several of which are far wider than the
+   content column. Scroll them individually rather than the whole page. */
+.sl-markdown-content table {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: var(--sl-text-sm);
+}
+
+.sl-markdown-content :is(th, td) {
+  border: 1px solid var(--sl-color-gray-5);
+  padding: 0.35rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.sl-markdown-content th {
+  background: var(--sl-color-gray-6);
+  color: var(--sl-color-text-accent);
+  white-space: nowrap;
+}
+
+.sl-markdown-content tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--sl-color-gray-6) 45%, transparent);
+}
+
+/* Rows describing something inert (a nop, an unused opcode, an assertion
+   trap) are dimmed, as they were on the standalone pages. */
+.sl-markdown-content tr.dim td {
+  color: var(--sl-color-gray-4);
+}
+
+.sl-markdown-content tr.dim code {
+  opacity: 0.75;
+}
+
+/* ── Field-layout diagram (the 16-bit record shape) ─────────────────────── */
+
+.fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 1rem 0 1.5rem;
+  font-family: var(--sl-font-mono);
+  font-size: var(--sl-text-xs);
+}
+
+.fields .f {
+  flex: 1 1 6rem;
+  min-width: 5rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.25rem;
+  text-align: center;
+  background: var(--sl-color-gray-6);
+}
+
+.fields .f b {
+  display: block;
+  color: var(--sl-color-text-accent);
+}
+
+.fields .f span {
+  display: block;
+  color: var(--sl-color-gray-3);
+  line-height: 1.4;
+}
+
+.fields .f.k {
+  border-color: var(--rs-green);
+}
+.fields .f.a {
+  border-color: var(--rs-peach);
+}
+.fields .f.p {
+  border-color: var(--rs-mauve);
+}
+.fields .f.d {
+  border-style: dashed;
+  opacity: 0.65;
+  flex-grow: 0;
+}
+
+/* ── Landing page ───────────────────────────────────────────────────────── */
+
+.hero-note {
+  color: var(--sl-color-gray-3);
+  font-size: var(--sl-text-sm);
+  max-width: 60ch;
+}

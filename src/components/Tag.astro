@@ -1,0 +1,41 @@
+---
+/**
+ * The confirmed / inferred marker used throughout these documents.
+ *
+ *   <Tag kind="confirmed" />   — read out of disassembly, or reproduced
+ *                                byte-for-byte against real data.
+ *   <Tag kind="inferred" />    — strongly implied, not independently proven.
+ */
+interface Props {
+  kind: 'confirmed' | 'inferred';
+}
+
+const { kind } = Astro.props;
+---
+
+<span class:list={['tag', `tag--${kind}`]}>{kind}</span>
+
+<style>
+  .tag {
+    display: inline-block;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 0 0.4em;
+    border-radius: 0.2rem;
+    vertical-align: 0.12em;
+    white-space: nowrap;
+    font-family: var(--sl-font-mono);
+  }
+  .tag--confirmed {
+    color: var(--rs-green);
+    background: color-mix(in srgb, var(--rs-green) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--rs-green) 40%, transparent);
+  }
+  .tag--inferred {
+    color: var(--rs-peach);
+    background: color-mix(in srgb, var(--rs-peach) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--rs-peach) 40%, transparent);
+  }
+</style>

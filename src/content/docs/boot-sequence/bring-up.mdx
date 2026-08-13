@@ -1,0 +1,171 @@
+---
+title: main() bring-up sequence
+description: >-
+  The second-pass execution of main step by step — SDK bring-up, the IOP kernel
+  reboot, the shared flag byte that gates most of it, and the hand-off into
+  overlay segment 1.
+sidebar:
+  label: 4 · Bring-up sequence
+  order: 2
+---
+
+import Tag from '../../../components/Tag.astro';
+
+## 4. main() bring-up sequence
+
+Primarily describes the second-pass execution from
+[§3](../disc-and-chain/#3-boot-chain-two-executions-of-main); steps now
+understood to belong to the first pass are noted explicitly.
+
+### 4.1 Prologue and boot markers
+
+- Standard N32 stack frame; saves `ra` and `s0`–`s7`.
+- `FullAllocAndFree(a0)` runs immediately. <Tag kind="inferred" /> heap
+  sanity/defrag pass.
+- An 8-byte magic value written to `0x01FE0000` — a boot-progress marker.
+- EE Timer 0's MODE register (`0x10000010`) set to `0x83`. Reused later as an RNG
+  seed source.
+
+### 4.2 Core SDK bring-up
+
+```asm
+mwInit()
+sceSifInitRpc()
+sceCdInit()
+```
+
+Followed by the **IOP kernel reboot** — `sceSifRebootIop` with two fixed string
+literals (the kernel's path and args), confirmed via boot log to load a distinct
+ROM-style image ([§6](../kernel-image/#6-custom-kernel-image-and-elfs)) located
+immediately after `main` on disc. `sceSifSyncIop` waits for completion; RPC and
+filesystem drivers are re-initialized since IOP-side state resets across the
+reboot. Thread priority is raised via `ChangeThreadPriority(tid, 0x2D)`.
+
+<Tag kind="inferred" /> — this reboot very likely triggers the full EE-side reset
+from [§3](../disc-and-chain/#3-boot-chain-two-executions-of-main), i.e. this is
+the *end* of the first-pass execution of `main`, not a mid-sequence step within
+one continuous run.
+
+### 4.3 CStorage::Open and SIF RPC system server IDs
+
+<Tag kind="confirmed" /> — `CStorage::Open`'s small integer parameter (e.g. `0`,
+`1`, `2` as seen at various call sites) is **not** itself a raw SIF System Server
+ID. It is `CStorage::Open`'s own internal index, which it translates to one of
+the standard PS2 SDK SIF RPC System Server IDs before issuing the actual RPC.
+
+<Tag kind="inferred" /> — this table is inferred from standard documentation
+(sourced from ps2tek). If the IOP module is custom then the SIF RPC System Server
+IDs may differ from the standard PS2 SDK values.
+
+| ID | Purpose | Module |
+|---|---|---|
+| `0x80000001` | File I/O | FILEIO |
+| `0x80000003` | IOP heap allocation | FILEIO |
+| `0x80000006` | Module/ELF loader | LOADFILE |
+| `0x80000100` | Pad | PADMAN |
+| `0x80000101` | Pad extension (unconfirmed) | PADMAN |
+| `0x80000400` | Memory cards | MCSERV |
+| `0x80000592` | CDVD init | CDVDFSV |
+| `0x80000593` | CDVD S commands | CDVDFSV |
+| `0x80000595` | CDVD N commands | CDVDFSV |
+| `0x80000597` | CDVD SearchFile | CDVDFSV |
+| `0x8000059A` | CDVD disk ready | CDVDFSV |
+| `0x80000701` | LIBSD remote (not in BIOS) | SDRDRV |
+| `0x80000901`–`0x80000905` | MTAP port management (not in BIOS) | MTAPMAN |
+| `0x80001400` | EyeToy (not in BIOS) | EYETOY |
+
+### 4.4 Engine (CBios) bring-up
+
+```asm
+CBios::GetStorage()      -> CStorage::StorageInit()
+CBios::GetStorage()      -> CStorage::MakeFileSystem()   ; see section 7
+CBios::GetDecompress()                                   ; handle reused throughout boot
+CSif::Init()
+```
+
+RNG seeding: a live EE Timer0 COUNT register read, multiplied by a fixed
+constant, `0xCAD` added, and the result seeds `InitRandom()`.
+<Tag kind="confirmed" />, fully reproducible.
+
+### 4.5 Conditional gate: the shared flag byte
+
+<Tag kind="confirmed" /> — a flag byte at `storage + 0xD99B` gates multiple
+subsequent decisions. Everywhere it is read, **nonzero means "skip the real work,
+return success/no-op immediately."**
+
+<Tag kind="inferred" />, revised given
+[§3](../disc-and-chain/#3-boot-chain-two-executions-of-main): since `main` runs
+twice across an EE reset, this flag may specifically distinguish first-pass from
+second-pass state. It is worth checking whether it reads differently across the
+two executions rather than assuming a generic "dev-mode" meaning. Alternatively,
+this flag could be a soft-reset flag.
+
+### 4.6 Game-specific IOP module load
+
+Gated by the flag in [§4.5](#45-conditional-gate-the-shared-flag-byte).
+
+<Tag kind="confirmed" /> — the core OS-level modules (`SYSMEM`, `LOADFILE`,
+`PADMAN`, `MCSERV`, `CDVDFSV`… see `IOPRP300.IMG`) are already active by this
+point, provided by the kernel image from the first pass
+([§4.2](#42-core-sdk-bring-up)). This loop's 12 modules are **game-specific** IOP
+modules, loaded via a `CStorage::Open`/`Read` from the first TOC entry, proven
+from disk read logs.
+
+Loop mechanics:
+
+1. Buffer read and decompressed via `CDecompress::Decode`.
+2. DMA'd into IOP heap memory.
+3. **12 modules** loaded in a loop (indices 0–11):
+   - Indices **8 and 9** are special-cased: `sceSifLoadStartModuleBuffer` with
+     argument strings from a fixed string table (likely driver args —
+     <Tag kind="inferred" />).
+   - All other indices: `sceSifLoadModuleBuffer`.
+
+### 4.7 Region setup, graphics, task init
+
+- `CStorage::InitHdd`, `std::set_new_handler`, `sceDmaReset`.
+- PAL/NTSC branch, GS display parameters per region.
+- `CPSTask::InitTask` — the main task/scheduler object.
+- 16 iterations of `CPSTask::GsSyncPath`.
+
+### 4.8 Sound init
+
+Same gate as [§4.5](#45-conditional-gate-the-shared-flag-byte).
+
+```asm
+CSoundManager::InitSoundManager()
+CSoundManager::InitSoundMemory(...)
+CSoundManager::InitMusicList(...)
+CVoiceManager::SetVoiceTable(...)
+CSoundManager::InitKeepSE(...)   ; conditional on a second flag
+```
+
+### 4.9 Secret key and checksum pass
+
+`CSound::GetSecretKeyCode` fills a buffer, which is processed by a **VU0
+microprogram**, combined with `CStorage::ReadClock`, summed into a byte, and used
+as a loop bound to burn additional `Random()` calls. <Tag kind="inferred" />:
+entropy mixing, not a hard integrity gate.
+
+### 4.10 Overlay segment loader: hand-off to segment 1 (Step0 00)
+
+```asm
+index = 1
+loop:
+    header = CDecompress::GetCompHeader(decompress_handle, buffer2, index)
+    if header == NULL: break
+    CBios::DecompressProgramOnly(decompress_handle, header, ...)
+    index += 1
+
+CBios::DecompressAndExec(decompress_handle, buffer2, index=1)   ; hardcoded
+```
+
+<Tag kind="confirmed" /> — `buffer2` holds a concatenated table of compressed
+segments. `GetCompHeader` is 1-based and returns `NULL` past the last segment;
+every segment from index 1 upward is pre-staged via `DecompressProgramOnly`; once
+exhausted, `DecompressAndExec` transfers execution permanently into segment 1.
+Code after this point is very likely dead.
+
+<Tag kind="inferred" /> — segment 1 almost certainly contains the runtime
+overlay-switching logic, since segments 2 and up are pre-staged but never
+executed from `main()` itself.

@@ -1,0 +1,215 @@
+---
+title: RMF container
+description: >-
+  Where RMF payloads live in Radiata Stories, the region-dependent file header,
+  and the packet layout that positions the token stream.
+sidebar:
+  label: 1–3 · Container
+  order: 1
+---
+
+import Tag from '../../../components/Tag.astro';
+import AddrRef from '../../../components/AddrRef.astro';
+
+`RMF1` is the container for every piece of displayable text in the game: field
+conversations, choice prompts, camp and menu strings, and save-slot names. These
+pages describe the container, the 16-bit token stream inside it, and both of the
+opcode spaces that operate on that stream.
+
+Facts are marked <Tag kind="confirmed" /> (read directly out of MIPS disassembly
+of the debug executable, or reproduced byte-for-byte against real packet data) or
+<Tag kind="inferred" /> (strongly implied by surrounding code or consistent
+across all observed data, but not independently proven).
+
+The format is **not identical across regions**. Unless a passage says otherwise
+it describes both, and every difference found is called out where it belongs and
+summarised in [§14](../reference/#14-regional-differences).
+
+Primary sources: the debug overlay `step0_00.bin` (base vaddr `0x001B4280`) and
+the Japanese overlay of the same name (base vaddr `0x001A2380`), plus their
+symbol maps and decompressed RMF payloads from both builds.
+
+## 1. Where RMF data lives
+
+An RMF payload always begins with the four-byte magic `RMF1`. On disc and inside
+the overlays it is normally held in a compressed container, so it must be
+decompressed before any of this applies; everything below describes the
+decompressed payload. The compression scheme is out of scope here.
+
+Three families of engine code consume RMF payloads:
+
+| Consumer | Entry point | Purpose |
+|---|---|---|
+| CTalk | <AddrRef sym="RmfStart" label="CTalk::RmfStart(uint,uint,bool,bool,uint,uint)" /> | Full conversation playback: bustups, name plates, voice, choices. |
+| CTalk (simple) | <AddrRef sym="RmfStartSimple" label="CTalk::RmfStartSimple(uint,int,int,uint)" /> | Single-packet playback with no conversation state. |
+| CSimpleMessage | `CCampObject::SetRmfMsg(CSimpleMessage*,uint,uint,uint)` | Camp and menu strings. |
+| CRadiMemoryCard | `CRadiMemoryCard::GetSaveDataNameRMF()` | Save-slot display names, from a small RMF embedded in the overlay. |
+
+Known embedded `SaveDataNameRmf` objects <Tag kind="confirmed" />:
+
+| Build | Overlay | Vaddr | Note |
+|---|---|---|---|
+| debug | `step1_00.bin` | `0x003CF950` | compressed, `RMF1` at `+0x11`, 752 bytes |
+| debug | `step1_01.bin` | `0x003F6EC0` | compressed, `RMF1` at `+0x11`, 752 bytes |
+| eng | `step1_00.bin` | `0x0039BCD0` | compressed, `RMF1` at `+0x11`, 752 bytes |
+| eng | `step1_01.bin` | `0x003C0080` | compressed, `RMF1` at `+0x11`, 752 bytes |
+| jpn | `step1_00.bin` | `0x0039BC00` | compressed, `RMF1` at `+0x11`, 10332 bytes |
+| jpn | `step1_01.bin` | `0x003BFC80` | compressed, `RMF1` at `+0x11`, 10332 bytes |
+
+The Japanese copies are thirteen times larger than the English ones for the same
+22 packets, because they carry a dynamic glyph payload that the English files do
+not ([§13](../layout/#13-embedded-glyph-data)).
+
+A debug-only overlay, `RmfChecker.bin`, drives `CDebugRmfChecker` — an in-game
+RMF browser. Its UI strings (`file number`, `packet number`, `background number`,
+`character`, `mode`, `normal`, `simple`, `consecutive`) name the arguments of
+`RmfStart` and are the source of the "file slot / packet number" terminology used
+throughout these pages.
+
+## 2. File header
+
+:::caution[The header is the one part of RMF that is region-dependent]
+The Japanese build places the packet offset table at `0x14`; the English builds
+place it at `0x18`. The English header carries one extra `u32` that the Japanese
+header does not. Everything after the header — packets, tokens, commands — is
+identical ([§14](../reference/#14-regional-differences)). A reader must therefore
+know the region before it can find the first packet.
+:::
+
+All multi-byte values in RMF are **little-endian**. The header is a fixed block
+followed by a packet offset table.
+
+| JP | English | Type | Field | Meaning |
+|---|---|---|---|---|
+| `0x00` | `0x00` | `char[4]` | magic | Always `RMF1` (`52 4D 46 31`). |
+| `0x04` | `0x04` | `u32` | version | `0x000000CE` in every observed file, both regions. No code has been found that reads it. <Tag kind="inferred" /> |
+| `0x08` | `0x08` | `u32` | glyph_data_size | Size of the embedded glyph tile block ([§13](../layout/#13-embedded-glyph-data)). Always a whole multiple of 512. Occurs in both regions; `0` when the file adds no glyphs of its own. <Tag kind="confirmed" /> |
+| `0x0C` | `0x0C` | `u32` | packet_data_size | Byte offset one past the last packet, which is also where the glyph tile block begins. |
+| `0x10` | `0x10` | `u32` | packet_count | Number of entries in the offset table. <Tag kind="confirmed" /> |
+| — | `0x14` | `u32` | glyph_data_end | **English only.** Exactly `packet_data_size + glyph_data_size`, i.e. one past the glyph tile block. That is where the glyph width table starts when there is one, and end-of-file when there is not — so it is **not** reliably the file size. <Tag kind="confirmed" /> |
+| `0x14` | `0x18` | `u32[n]` | packet_offsets | File-relative offset of each packet. `0xFFFFFFFF` means "packet absent". <Tag kind="confirmed" /> |
+
+Header length is `0x14 + packet_count * 4` (JP) or `0x18 + packet_count * 4`
+(English), and in practice the first packet begins immediately after the table.
+
+<AddrRef sym="GetPacketAddress" label="CTalk::GetPacketAddress(int packet, int file_slot)" />
+is the cleanest proof of the header shape, and putting the two builds side by
+side isolates the difference exactly. Both read the count from `0x10`; they
+diverge on one displacement, and on nothing else <Tag kind="confirmed" />:
+
+```asm
+; ---- English (debug SLUS-21262), CTalk::GetPacketAddress @ 0x0030F400 ----
+0030F454  lw    $v0, 0x10($a0)      ; packet_count
+0030F458  sltu  $at, $s0, $v0       ; index < count ?
+0030F45C  bnez  $at, resolve
+0030F464  b     fail                ; out of range -> return NULL
+; resolve:
+0030F470  sll   $v0, $s0, 2         ; index * 4
+0030F474  addu  $v1, $v0, $a0
+0030F478  lw    $v1, 0x18($v1)      ; packet_offsets[index]
+0030F47C  addiu $v0, $zero, -1
+0030F480  bne   $v1, $v0, ok        ; -1 -> return NULL
+0030F484  addu  $v0, $a0, $v1       ; packet = base + offset
+
+; ---- Japanese, CTalk::GetPacketAddress @ 0x002EAE30 ----
+002EAE84  lw    $v0, 0x10($a0)      ; packet_count            (same)
+002EAE88  sltu  $at, $s0, $v0
+002EAE8C  bnez  $at, resolve
+002EAE94  b     fail
+; resolve:
+002EAEA0  sll   $v0, $s0, 2
+002EAEA4  addu  $v1, $v0, $a0
+002EAEA8  lw    $v1, 0x14($v1)      ; packet_offsets[index]   (one word earlier)
+002EAEAC  addiu $v0, $zero, -1
+002EAEB0  bne   $v1, $v0, ok
+002EAEB4  addu  $v0, $a0, $v1
+```
+
+Real files agree. Decompressing the embedded `SaveDataNameRmf` from the same
+overlay in each build gives two payloads with `packet_count = 22`:
+
+| Build | size | `[0x08]` | `[0x0C]` | `[0x10]` | `[0x14]` | `[0x18]` | First packet offset |
+|---|---|---|---|---|---|---|---|
+| JP | 10332 | 9728 | 604 | 22 | 108 | 124 | `0x14 + 22*4 = 108` ✓ |
+| eng | 752 | 0 | 752 | 22 | 752 | 112 | `0x18 + 22*4 = 112` ✓ |
+| debug | 752 | 0 | 752 | 22 | 752 | 112 | `0x18 + 22*4 = 112` ✓ |
+| eng (dialogue) | 40364 | 34304 | 5992 | 38 | 40296 | 176 | `0x18 + 38*4 = 176` ✓ |
+| jpn (dialogue) | 6312 | 4608 | 1704 | 16 | 84 | 184 | `0x14 + 16*4 = 84` ✓ |
+
+The last two rows are full dialogue files rather than save-name blobs, and they
+are the ones that carry glyph data. Both still land on their region's table
+offset exactly, and the English one is the file that pins down `[0x14]`:
+`40296 = 5992 + 34304`, which is the sum and not the packet size.
+
+In each case the word at the region's table offset is exactly the address one
+past the table, which is only true for the correct layout. The JP row also
+settles what `[0x08]` is: `9728 + 604 = 10332`, the file size to the byte, so
+`[0x08]` measures the trailing payload and `[0x0C]` marks where it starts
+([§13](../layout/#13-embedded-glyph-data)).
+
+:::note[How the trailing sections are located]
+A file is packets, then an optional block of glyph tiles, then an optional table
+of widths for those glyphs. Two header words locate the boundaries, and one
+English file carrying all three sections pins both of them down exactly
+<Tag kind="confirmed" />:
+
+```asm
+[0x0C] = 5992    ; packets end / tiles begin
+[0x08] = 34304   ; tile block size            34304 / 512 = 67 tiles
+[0x14] = 40296   ; == 5992 + 34304, one past the tiles
+size   = 40364   ; 68 bytes more: the width table
+```
+
+This is the file that settles `[0x14]`. Everywhere else `[0x08]` is zero, which
+makes `packet_data_size` and `packet_data_size + glyph_data_size` the same
+number; here they differ by 34304 and the field tracks the sum, not the packet
+size.
+
+It also shows the field is not a file total, since 68 bytes of width table follow
+it. The Japanese header has no equivalent word at all — a Japanese reader
+computes the same boundary as `[0x0C] + [0x08]`.
+:::
+
+## 3. Packet layout
+
+A packet is one conversational block: a shared cast of speakers plus a sequence
+of messages. <AddrRef sym="RmfStartSimple" label="CTalk::RmfStartSimple" />
+positions the command stream like this <Tag kind="confirmed" />:
+
+```asm
+003104C4  lw    $a3, 0x00($v0)      ; glyph_budget
+003104C8  lw    $a0, 0x04($v0)      ; speaker_count
+003104D8  sll   $a0, $a0, 2         ; * 4 bytes per entry
+003104DC  addu  $a0, $v0, $a0
+          addiu $a1, $a0, 8         ; stream = packet + 8 + speaker_count*4
+```
+
+| Offset | Type | Field | Meaning |
+|---|---|---|---|
+| `0x00` | `u32` | glyph_budget | Total number of visible glyphs in the packet — the sum of every message's glyph count. Used to size sprite allocations up front. |
+| `0x04` | `u32` | speaker_count | Number of entries in the speaker table. |
+| `0x08` | `entry[n]` | speaker_table | 4 bytes each: `u16 character_id`, `u16 variant_id`. |
+| `0x08+4n` | `u16[]` | stream | The token stream ([§4](../token-stream/#4-the-token-stream)). |
+
+### 3.1 The speaker table
+
+Every command that names a character (`0E 20` Speaker, `0E 24` Face, `0E 4E`
+NameWindow, …) carries a **1-based index into this table**, not a global
+character id. Index `0` means "no speaker". The indirection is what lets the same
+message stream be reused with a different cast.
+
+The second `u16` of each entry is `0` in ordinary field conversation packets. The
+engine passes the whole 32-bit word to
+<AddrRef sym="GetCharaNo" label="CTalk::GetCharaNo" />, which resolves it to a
+runtime bustup slot. Global character ids include pseudo-ids that resolve late —
+`9900` for the currently active character and `9901`–`9905` for the five party
+slots — so a packet can address "whoever is in slot 2" without the concrete id
+being known in advance.
+
+### 3.2 Packet padding
+
+In all observed data, packet bodies are padded to a 4-byte boundary and followed
+by a 4-byte `00 00 00 00` terminator, so packet offsets are always 4-byte
+aligned. The first `00 00` word of that terminator is a real token — command
+`0x00`, dispatched to <AddrRef sym="_CbEnd" /> — and the remainder is slack.
+<Tag kind="inferred" />

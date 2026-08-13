@@ -1,0 +1,113 @@
+---
+title: Message archetypes
+description: >-
+  The three shapes that account for essentially all real RMF content, and a
+  complete byte-by-byte walkthrough of one voiced dialogue packet.
+sidebar:
+  label: 9–10 · Messages
+  order: 4
+---
+
+## 9. Message archetypes
+
+Three shapes account for essentially all real content.
+
+### 9.1 Dialogue
+
+```asm
+0F 25 00 00 <glyph_count:u16>            ; Sentence header
+0E 20 <speaker_idx> <00 00 | 01 00>      ; Speaker + bustup on/off
+[02 20 R G B A]                          ; text colour   (default 6A 69 5F 80)
+[02 21 R G B A]                          ; shadow colour
+[03 20 <w:u16> <h:u16>]                  ; glyph cell, U8.8   (region-specific)
+[07 10 <speed:u16>]                      ; text speed, U8.8   (region-specific)
+[04 20 <x:s16> <y:s16>]                  ; line position
+[0F 28 1F 00 <voice:u16>]                ; voice clip
+ 0E 4E <idx> <mode> <offset> <name_id>   ; name plate
+ <per-line 04 20 pos, 02 20 colour, glyphs, 0A 00 newlines>
+ 0F 20 <duration:u16> <03 00 | 02 00>    ; wait / continue cursor
+```
+
+### 9.2 Bare text
+
+No `0F 25` wrapper and no speaker table use: the packet body is a bare token
+stream, distinguished by the absence of a Sentence header. This is the form
+consumed by `CSimpleMessage`, the camp menus, and `GetSaveDataNameRMF`.
+
+### 9.3 Choice prompt
+
+```asm
+0F 25 00 00 <total_glyph_count:u16>
+0E 20 <speaker_idx> <bustup>
+[ … same optional style records as dialogue … ]
+0E 4E <idx> <mode> <offset> <name_id>
+0F 24 00 00 <choice_count:u16>           ; time limit 0 = none
+<choice 0 tokens> 00 00
+<choice 1 tokens> 00 00
+…
+```
+
+The glyph count in the sentence header is the sum over all options, and each
+option is terminated by a bare `00 00` word (command `0x00`, End). The name-plate
+offset is chosen from the option count using the same formula the line count
+drives for dialogue, so the plate clears the option list.
+
+## 10. Worked example
+
+A representative 32-packet file, 6164 bytes. This is an **English** file, so the
+offset table starts at `0x18`; on a Japanese file it would start at `0x14` and
+there would be no `glyph_data_end` word
+([§2](../container/#2-file-header)). Header:
+
+```asm
+00000000  52 4D 46 31 CE 00 00 00  ; magic "RMF1"     version 0xCE
+00000008  00 00 00 00 14 18 00 00  ; reserved         packet_data_size 6164
+00000010  20 00 00 00 14 18 00 00  ; packet_count 32  glyph_data_end 6164
+00000018  98 00 00 00 08 01 00 00  ; packet[0] = 0x98   packet[1] = 0x108
+00000020  7C 01 00 00 E4 01 00 00  ; packet[2]          packet[3]
+          …
+```
+
+`0x18 + 32*4 = 0x98`, exactly the first packet offset — no gap between the table
+and the data.
+
+Packet 0, a single-line voiced dialogue message, fully annotated:
+
+```asm
+0098  0C 00 00 00              ; glyph_budget   = 12
+009C  01 00 00 00              ; speaker_count  = 1
+00A0  03 00 00 00              ; speaker[0]     = character 3, variant 0
+
+00A4  0F 25 00 00 0C 00        ; Sentence       flags=0, 12 glyphs
+00AA  0E 20 01 00 01 00        ; Speaker        table index 1, mode 1 (no bustup)
+00B0  02 20 6A 69 5F 80        ; Color          RGBA 6A 69 5F 80  (default body text colour)
+00B6  02 21 00 00 00 00        ; Color sub1     shadow = 00000000
+00BC  03 20 33 0B 66 16        ; Dimensions     w = 0x0B33 = 11.2,  h = 0x1666 = 22.4  (U8.8)
+00C2  05 01                    ; TextStyle      style = 1
+00C4  07 10 00 03              ; TextSpeed      0x0300 = 3.0
+00C8  04 20 AB FF BE 00        ; Position       x = -85, y = 190
+00CE  0F 28 1F 00 01 00        ; PlaySe         channel 0x1F (= auto/-1), voice id 1
+00D4  0E 4E 01 00 01 00
+      76 00 00 00              ; NameWindow     idx 1, mode 1, y-offset 118, name id 0
+00DE  07 10 00 04              ; TextSpeed      0x0400 = 4.0
+00E2  75 00 8B 00 01 00        ; S  o  <space>
+      95 00 8B 00 91 00        ; y  o  u
+      01 00                    ; <space>
+      7F 00 7D 00 89 00 81 00  ; c  a  m  e
+      13 00 13 00 13 00        ; .  .  .
+0100  0F 20 3C 00 03 00        ; WaitTime       60 frames, flags 3 -> show continue cursor
+0106  00 00 00 00              ; End + alignment slack
+0108  <next packet>
+```
+
+Cross-checks that all hold:
+
+- **Glyph count.** "So you came..." has 12 non-space visible characters. The
+  `0F 25` count and the packet's `glyph_budget` both read 12.
+- **Y position.** The one-line case of the vertical formula in
+  [§11.2](../layout/#112-vertical-placement) gives `-5-7+202 = 190`. ✓
+- **Name plate offset.** `190 - 72 = 118` = `0x76`. ✓
+- **X position.** Summing the advance widths of the visible characters and
+  halving ([§11.3](../layout/#113-horizontal-centring)) gives `-85` = `0xFFAB`. ✓
+- **Alignment.** Body = 108 bytes, already a multiple of 4, plus the 4-byte
+  terminator → `0x98 + 0x70 = 0x108`, the next packet offset. ✓

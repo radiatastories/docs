@@ -1,0 +1,36 @@
+{
+  "name": "radiatastories-docs",
+  "version": "1.0.0",
+  "description": "Reverse-engineering reference for the PS2 game Radiata Stories",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check",
+    "astro": "astro"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/radiatastories/docs.git"
+  },
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/radiatastories/docs/issues"
+  },
+  "homepage": "https://radiatastories.github.io/docs/",
+  "dependencies": {
+    "@astrojs/starlight": "^0.41.7",
+    "astro": "^7.2.1",
+    "sharp": "^0.35.3"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "typescript": "^6.0.3"
+  }
+}

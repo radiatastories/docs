@@ -1,0 +1,52 @@
+---
+title: ELF segment map
+description: >-
+  main's program header table, the 17 overlay segments it declares, and why
+  only one of them carries real file content.
+sidebar:
+  label: 5 · Segment map
+  order: 3
+---
+
+import Tag from '../../../components/Tag.astro';
+
+## 5. ELF program header and segment memory map
+
+<Tag kind="confirmed" /> via byte-exact parse (`e_phnum=18`, `e_phentsize=32`,
+`e_phoff=0x34`), cross-checked against the boot logs and the proto memory map.
+The load confirmation (`0 00100000 0008d900`) shows `0x8D900` matching `main`'s
+Phdr entry 0 `p_filesz`, with an associated `memsz` of `0x000B4280` — derived
+two independent ways.
+
+| # | Type | vaddr | memsz | Name |
+|---|---|---|---|---|
+| 0 | `NULL` | `0x00100000` | `0x000B4280` | main |
+| 1 | `LOAD` | `0x001B4280` | `0x001FFD80` | step0_00.bin |
+| 2 | `LOAD` | `0x003B4000` | `0x0001C280` | step1_00.bin |
+| 3 | `LOAD` | `0x003B4000` | `0x00043C00` | step1_01.bin |
+| 4 | `LOAD` | `0x003B4000` | `0x00099180` | step1_02.bin |
+| 5 | `LOAD` | `0x0044D180` | `0x00028E00` | step2_00.bin |
+| 6 | `LOAD` | `0x0044D180` | `0x0000D300` | step2_01.bin |
+| 7 | `LOAD` | `0x0044D180` | `0x00028700` | step2_99.bin |
+| 8 | `LOAD` | `0x0044D180` | `0x00002E00` | hoshi.bin |
+| 9 | `LOAD` | `0x0044D180` | `0x00000B80` | kushi.bin |
+| 10 | `LOAD` | `0x0044D180` | `0x00002900` | nishi.bin |
+| 11 | `LOAD` | `0x0044D180` | `0x0000CE00` | yoko.bin |
+| 12 | `LOAD` | `0x0044D180` | `0x00001980` | kame.bin |
+| 13 | `LOAD` | `0x0044D180` | `0x00011B00` | RouteEditor.bin |
+| 14 | `LOAD` | `0x0044D180` | `0x00015B80` | CharaChecker.bin |
+| 15 | `LOAD` | `0x0044D180` | `0x00003080` | RmfChecker.bin |
+| 16 | `LOAD` | `0x02000000` | `0x00008480` | T10000.bin |
+| 17 | `LOAD` | `0x00475F80` | `0x00000000` | heap |
+
+### Key findings
+
+- `main`'s own Phdr entry is `PT_NULL`; every other entry is `PT_LOAD` — this
+  likely lets a loader filter on `p_type == PT_LOAD` to skip "myself."
+- Only `main` has real file content (`p_offset=0x280`, `p_filesz=0x8D900`, ending
+  at `0x8DB80`). **Every other segment shares that same `p_offset` with
+  `p_filesz=0`** — the Phdr table records only destination and decompressed size;
+  actual compressed byte boundaries come from the `GetCompHeader` chain
+  ([§4.10](../bring-up/#410-overlay-segment-loader-hand-off-to-segment-1-step0-00)).
+  The two are redundant descriptions of the same 17-segment layout.
+- `p_flags=7` (RWX) for real segments; `heap` uses `p_flags=6`.

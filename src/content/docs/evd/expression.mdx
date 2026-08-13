@@ -1,0 +1,150 @@
+---
+title: The expression command
+description: >-
+  Opcode 0x14 in full — the eight operations, the typed operand descriptors,
+  and the proven read and write layouts for each operand type.
+sidebar:
+  label: 11 · Expression command
+  order: 4
+---
+
+import Tag from '../../../components/Tag.astro';
+
+Opcode [`0x14`](../commands/14/) is by far the most-used command in the game:
+**46,311 of the 386,348 command lines** in the loose event corpus, about 12%.
+
+It is a general read-modify-write across most mutable script state. About 90% of
+uses are a plain copy.
+
+## 1. Shape
+
+`Command_14` (`0x002E9FA0`) reads a control word, evaluates two operand words
+into two temporary integers, applies an operation selected by the low three bits
+of the control word, and optionally stores the result.
+
+```asm
+control word
+operand word 0   ; left-hand side / destination
+operand word 1   ; right-hand side / value
+```
+
+## 2. The eight operations
+
+The low three bits of the control word select the operation
+<Tag kind="confirmed" />:
+
+| Low bits | Operation |
+|---:|---|
+| `0` | copy — take the right-hand value |
+| `1` | add |
+| `2` | subtract |
+| `3` | multiply |
+| `4` | divide — divide by zero produces `0` |
+| `5` | modulo — divide by zero produces `0` |
+| `6` | bitwise AND |
+| `7` | bitwise OR |
+
+Divide and modulo do not fault on a zero divisor; they yield `0`. Any decoder or
+emulator has to reproduce that, because scripts rely on it.
+
+## 3. Control bits 8–11 are a source domain, not a destination
+
+An earlier reading of this command treated bits 8–11 as "where the result is
+stored". That is wrong. Grouping every use in the corpus by that field and
+looking at the shape of the right-hand operand settles it — the field selects
+which **domain the operand is read from**, and the value shapes line up with
+that reading rather than with a destination.
+
+The destination is chosen by the type nibble on operand word 0.
+
+## 4. Operand types
+
+Each operand carries a type nibble. Read-side sources proven by trace:
+
+- config/event flags, through `CRadiApp::GetConfigEventFlag`
+- script event values, through `CRadiScript::GetEventValueForScript`
+- character-property dispatch tables, after `GetAbstractionCharacterNumber`
+- config-property dispatch tables
+- item-property dispatch tables, after `GetAbstractionItemNumber`
+- stand-position vectors, after `GetAbstractionStandPosNumber`
+- literal immediate values
+
+Write-side destinations proven by trace:
+
+- config/event flags, through `CRadiApp::SetConfigEventFlag`
+- script event values, through `CRadiScript::SetEventValueForScript`
+- character-property dispatch tables
+- config-property dispatch tables
+- item-property dispatch tables
+- `SCR_DATA` float arrays at `+0x60` and `+0x70`, for the special ids `0x3F3`
+  and `0x3F5`
+
+## 5. Proven operand layouts
+
+These come from direct trace of `Command_14` <Tag kind="confirmed" />.
+
+### 5.1 Type `0` — config/event flag, both sides
+
+Read at `0x002EA0A8`, write at `0x002EA3D8`.
+
+```asm
+bits 0-15    first flag id
+bits 16-23   extra bit count
+bits 24-31   ignored by the engine
+```
+
+`count = ((word >> 16) & 0xFF) + 1` consecutive flags hold a multi-bit integer,
+**LSB first**. Reads assemble the bits with `GetConfigEventFlag(flag + i)`;
+writes scatter them with `SetConfigEventFlag(flag + i, bit)`.
+
+This is how a script stores a small number in a run of boolean flags.
+
+### 5.2 Type `1` — script event value, write side
+
+At `0x002EA430`: only the low 16 bits of the operand word reach
+`SetEventValueForScript`. High bits are ignored.
+
+### 5.3 Type `5` read — stand-position component
+
+At `0x002EA288`. The low 16 bits resolve through
+`GetAbstractionStandPosNumber`; byte 3 indexes the returned position vector
+(`0`/`1`/`2` = x/y/z), and the float component is **truncated** to an integer.
+
+### 5.4 Type `5` write — script-local float slots
+
+At `0x002EA590`. The low 16 bits select the slot id, and byte 3 is the component
+index:
+
+| Slot id | Effect |
+|---|---|
+| `0x3F3` | Stores the integer result as a float at `SCR_DATA + 0x60 + component*4` |
+| `0x3F5` | Converts the result from **degrees to radians** (`* pi / 180`) and stores at `SCR_DATA + 0x70 + component*4` |
+| anything else | Stores nothing |
+
+The `0x3F5` conversion is the only place in the format where a stored value is
+transformed on the way in rather than being written verbatim.
+
+## 6. Property dispatch tables
+
+The `__ptmf_scall` in `Command_14` dispatches through per-domain property
+tables, recovered by emulating their static initialisers <Tag kind="confirmed" />:
+
+| Table | Address | Initialiser | Entries | Symbols |
+|---|---|---|---:|---|
+| `CRadiApp::pfnParamTbl` | `0x003B0E30` | `__sinit_r_baseconfig.cpp` `0x003A5450`+`0x284` | 14 | `SystemParaCode_000..013` |
+| `CCharacterManager::pfnParamTbl` | `0x003B0FE0` | `__sinit_r_charamanager2.cpp` `0x003A56E0`+`0x1104` | 75 | `CharaParaCode_000..074` |
+| `CItemManager::pfnParamTbl` | `0x0035BC80` | — | — | not yet recovered |
+
+Character entries 4, 5 and 73 all point at the same stub (`0x002A0FD0`), so
+those property codes are unused — a useful validity check on any decoded
+operand.
+
+See also [property `0x1D`](../operands/#84-property-0x1d-storage-the-game-never-reads),
+which scripts use as general-purpose per-character storage the engine never
+reads.
+
+## 7. What still round-trips as raw
+
+Combinations outside the layouts above are preserved verbatim as a control word
+plus two operand words. They re-encode byte-exactly; what they mean is simply
+not established yet.

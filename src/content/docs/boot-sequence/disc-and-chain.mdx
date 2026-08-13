@@ -20,8 +20,30 @@ captured via PCSX2 — are used throughout as ground truth alongside the static
 disassembly of USA (proto) `SLUS-21262`. Manual verification on dumped ISO level
 files was also used to confirm the boot sequence.
 
-- Analysis of both **release** versions reveals identical `main` ELFs.
-- The `main` ELF differs between proto and release builds.
+- **The two release builds share the same `main` code, but not the same bytes**
+  <Tag kind="confirmed" />. All three files are distinct:
+
+  | Build | Size | SHA-256 |
+  |---|---:|---|
+  | Debug (proto) | 581,552 | `161bc2e5e7c49fdde4f9d5199a43f238c5d88703d909f1f0362f1f2b8e74ea99` |
+  | USA release | 518,576 | `98a2dcb45c44915c666639fa7946224d2a0d0da4eb12630e2283693ac68f5440` |
+  | Japanese release | 518,576 | `213adf37b41b475aaeae4d2e59eb1e716bc7070ae04d3ec5a79432fd017e3143` |
+
+  The two retail files are the same size and differ in 8.6% of their bytes —
+  but those differences are spread across 23,886 runs averaging under two
+  words each, which is what embedded addresses and data look like, not
+  different code. Function-for-function the two are the same: **all 1,209
+  functions confirmed inside the `main` ELF sit at the same address and the
+  same size in both**, and a function is only confirmed when its body matches
+  after J/JAL targets and MIPS immediates are normalised.
+
+  So "the release builds have the same `main`" is true of the code and false of
+  the file. The prototype's differs in both.
+
+- **The overlays are where the builds actually diverge.** In `step0_00`, only
+  1,092 of 2,515 shared symbols sit at the same address across the two retail
+  builds — which is why the RMF and EVD pages carry separate ENG and JPN
+  addresses throughout.
 - All versions' IOP kernel images are identical.
 - All versions' custom ELFs are identical.
 

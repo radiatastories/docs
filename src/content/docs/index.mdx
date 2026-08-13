@@ -55,11 +55,14 @@ stated rather than averaged away.
 | Build | Identifier | Role |
 |---|---|---|
 | Debug (proto) | `SLUS-21262` | The prototype. Retains assertions, symbol names and debug overlays, so it is the primary source for structure. |
-| USA release | `SLUS-21262` | Retail. Same `main` ELF as the Japanese release. |
+| USA release | `SLUS-21262` | Retail. Same `main` code as the Japanese release, function for function. |
 | Japanese release | `SLPM-65800` | Retail. Differs from the English builds in the RMF header and in several text metrics. |
 
-All three share identical IOP kernel images and identical custom ELFs; the `main`
-ELF differs only between the prototype and the releases.
+All three share identical IOP kernel images and identical custom ELFs. The two
+retail builds also share their `main` code — every function sits at the same
+address in both — though the files themselves are not byte-identical. Where they
+genuinely diverge is the overlays, which is why addresses are given per build
+throughout.
 
 {/* No outbound links yet. When there are repos, a community or tools to point
     at, add them to `social` in astro.config.ts and as a card above. */}

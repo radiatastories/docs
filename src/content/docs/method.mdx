@@ -38,8 +38,12 @@ disproved it.
 | USA release | `SLUS-21262` | Retail. |
 | Japanese release | `SLPM-65800` | Retail. Its symbol map is derived rather than complete, so some functions had to be located structurally. |
 
-Both release builds share the same `main` ELF; the prototype's differs. All three
-have identical IOP kernel images and identical custom ELFs.
+The two retail builds share their `main` code function for function — all 1,209
+confirmed functions are at the same address and size in both — though the files
+are not byte-identical, and the prototype's differs outright. All three have
+identical IOP kernel images and identical custom ELFs. Hashes and the overlay
+comparison are in
+[Disc layout and boot chain](/docs/boot-sequence/disc-and-chain/).
 
 ## Addresses
 

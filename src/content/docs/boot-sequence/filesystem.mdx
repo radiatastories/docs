@@ -23,7 +23,7 @@ if storage[+0xD99B] != 0:
     return SUCCESS
 
 sceCdDiskReady(0)
-CStorage::Open(storage, index=0)      ; -> SIF SearchFile [§4.3](../bring-up/#43-cstorageopen-and-sif-rpc-system-server-ids)
+CStorage::Open(storage, index=0)      ; -> SIF SearchFile
 buf = operator_new(0xD800)
 CStorage::Read(storage, buf, size=0xD800)
 ```

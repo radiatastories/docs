@@ -23,7 +23,9 @@ The dev server serves the site under the `/docs` base path, so open
 | `npm run dev` | Dev server with hot reload |
 | `npm run build` | Static build into `dist/` |
 | `npm run preview` | Serve the built output locally |
-| `npm run check` | Type-check `.astro`, `.ts` and content collections |
+| `npm run check` | Validate the EVD dataset, run its gate tests, then type-check |
+| `npm run validate:evd` | Check the EVD opcode dataset's invariants |
+| `npm run test:evd` | Prove each validator gate still fails when it should |
 
 ## Layout
 
@@ -64,8 +66,26 @@ that file fails the build rather than rendering a dead reference.
 signature, per-build addresses, engine calls, bitmasks and per-field
 documentation. It drives the opcode reference table, the 138 generated command
 pages under `/evd/commands/`, and the sidebar entries for them, so those three
-can never disagree. It is generated from the reverse-engineering notes; edit
-those and regenerate rather than hand-editing the file.
+can never disagree. **It is generated — do not hand-edit it.**
+
+Regenerate with [`scripts/build-evd-data.mjs`](scripts/build-evd-data.mjs). It
+reads the reverse-engineering tree, which is not part of this repository:
+
+```bash
+node scripts/build-evd-data.mjs --rs-elf "/path/to/rs_elf"
+```
+
+`RS_ELF` works as an environment variable too. Every input affects the output,
+so a missing one is a hard error rather than a warning — the one input that is
+not in that tree is checked in under `scripts/inputs/`.
+
+`npm run validate:evd` enforces the dataset's invariants against the checked-in
+file alone, with no reference tree, so it runs in CI: 138 records, numerically
+sorted and unique; evidence exactly matching corpus reachability; no duplicate
+or divergent form names; no orphaned or over-promising text; every record with
+a debug address. `npm run test:evd` mutates a copy of the dataset once per gate
+and asserts each one rejects it, so a gate that quietly stops working fails the
+build.
 
 ### Evidence markers
 

@@ -34,6 +34,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Both run against the checked-in dataset only, so they need no
+      # reference tree. test:evd proves each gate still fails when it should.
+      - name: Validate EVD opcode dataset
+        run: npm run validate:evd
+
+      - name: Test EVD validator gates
+        run: npm run test:evd
+
       - name: Build site
         run: npm run build
 

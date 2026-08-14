@@ -72,11 +72,11 @@ export default defineConfig({
         {
           label: 'EVD — event script',
           items: [
-            { label: '1–4 · Container and encoding', slug: 'evd/format' },
-            { label: '5–7 · Operands and state', slug: 'evd/operands' },
-            { label: '10 · Control flow', slug: 'evd/control-flow' },
-            { label: '11 · Expression command', slug: 'evd/expression' },
-            { label: '12 · Opcode reference', slug: 'evd/opcodes' },
+            { label: 'Container and encoding', slug: 'evd/format' },
+            { label: 'Operands and state', slug: 'evd/operands' },
+            { label: 'Control flow', slug: 'evd/control-flow' },
+            { label: 'Expression command', slug: 'evd/expression' },
+            { label: 'Opcode reference', slug: 'evd/opcodes' },
             {
               label: 'Commands',
               collapsed: true,

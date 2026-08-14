@@ -4,7 +4,7 @@ description: >-
   The EVD event-script container, the 32-bit instruction encoding, the
   execution model, and a complete worked example decoded byte by byte.
 sidebar:
-  label: 1–4 · Container and encoding
+  label: Container and encoding
   order: 1
 ---
 
@@ -38,7 +38,7 @@ Any error in them would surface as a byte mismatch.
 
 Field *meanings* are weaker and are marked as such. Where a trace establishes
 where a value is written but not what consumes it, this document says so rather
-than inventing a purpose. [What is not established](#12-what-is-not-established)
+than inventing a purpose. [What is not established](#6-what-is-not-established)
 lists the gaps.
 
 ## 2. Container layout
@@ -54,9 +54,14 @@ multiply by 4 for a byte offset.
 +0x0C   ...       command region, runs to end of file
 ```
 
-The command region begins immediately at `+0x0C` and is a straight sequence of
-commands. There is no separate code/data split and no length field: execution
-starts at `+0x0C` and proceeds until a command stops it.
+Execution begins at `+0x0C`, and there is no length field and no code/data
+section table: reachable paths from that address are decoded as commands.
+
+That is **not** the same as saying every byte after `+0x0C` is part of one
+linear command stream. Some files embed complete EVD blobs and other
+unreachable regions inside the command region — inline script data belonging to
+the stacked-start commands — so a decoder that walks linearly from `+0x0C` to
+end-of-file will desynchronise on them and invent commands that never execute.
 
 ### 2.1 Header flags
 
@@ -64,16 +69,20 @@ A small field at `+0x04`. Observed values across all 7,462 parsed files:
 
 | Value | Files |
 |---:|---:|
-| `3` | 2,719 |
 | `0` | 2,693 |
-| `7` | 1,022 |
 | `1` | 745 |
-| `6` | 201 |
 | `2` | 80 |
+| `3` | 2,719 |
+| `4` | 1 |
+| `6` | 201 |
+| `7` | 1,022 |
+| `9` | 1 |
+| **Total** | **7,462** |
 
-Three bits are in use. **What they select has not been established** — no reader
-of this word has been located. `SetScriptNumber` reads it as a byte and branches
-on the values `1`, `2` and `3`:
+Four bits are in use — values `4` and `9` occur once each, and `9` is the only
+file that sets bit 3. **What any of them select has not been established**: no
+reader of this word has been located. `SetScriptNumber` reads it as a byte and
+branches on the values `1`, `2` and `3`:
 
 ```asm
 lbu   v0, 0x04(evd_base)
@@ -315,7 +324,7 @@ end script                                                     ; yields
 
 Every byte of the file is accounted for.
 
-## 12. What is not established
+## 6. What is not established
 
 Stated plainly, because a format document that hides its gaps causes downstream
 errors.

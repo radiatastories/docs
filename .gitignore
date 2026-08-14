@@ -21,3 +21,5 @@ pnpm-debug.log*
 .claude/
 CLAUDE.md
 .mcp.json
+# Working audit output — regenerated locally, not part of the published site.
+EVD_AUDIT_REPORT.md

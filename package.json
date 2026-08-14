@@ -7,9 +7,11 @@
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
-    "build": "astro build",
+    "build": "npm run validate:evd && astro build",
     "preview": "astro preview",
-    "check": "astro check",
+    "check": "npm run validate:evd && npm run test:evd && astro check",
+    "validate:evd": "node scripts/validate-evd-data.mjs",
+    "test:evd": "node scripts/test-validate-evd.mjs",
     "astro": "astro"
   },
   "repository": {

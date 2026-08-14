@@ -4,7 +4,7 @@ description: >-
   All 138 opcodes installed in CRadiScript::pfnTable, with handler behaviour,
   per-build addresses and a link to each command's own page.
 sidebar:
-  label: 12 · Opcode reference
+  label: Opcode reference
   order: 5
 ---
 
@@ -55,7 +55,8 @@ Everything else falls through to the default handler:
 | `0x40`–`0x5F` | Background, map, landscape, camera, vibration |
 | `0x60`–`0x7F` | 2D primitives, textures, sound, movies |
 | `0x80`–`0x8F` | Vibration data, dialogue, text output, windows |
-| `0xA0`–`0xD5` | Person/schedule system, battle setup, special effects |
+| `0xA0`–`0xD6` | Person/schedule system, battle setup, special effects |
+| `0xE0`–`0xE2` | Character placement: life flags and group queries |
 | `0xF0`, `0xFF` | Markers and immediate return |
 
 Two carry more weight than the rest: [`0x14`](../expression/) is the

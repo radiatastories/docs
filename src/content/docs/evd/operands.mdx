@@ -4,19 +4,19 @@ description: >-
   How an EVD command names a character, and the three stores of state a script
   can address — config flags, event values, and character properties.
 sidebar:
-  label: 5–7 · Operands and state
+  label: Operands and state
   order: 2
 ---
 
 import Tag from '../../../components/Tag.astro';
 
-## 6. The argument byte
+## 1. The argument byte
 
 Bits 16–23 of the command header are handed to the handler as a bitfield. There
 is no format-wide meaning; each handler defines its own. Two patterns recur
 often enough to be worth stating.
 
-### 6.1 Bit 0 as a "character follows" gate
+### 1.1 Bit 0 as a "character follows" gate
 
 On the large family of character commands, argument bit `0` selects where the
 character comes from:
@@ -29,14 +29,14 @@ It is a presence flag, not an option: it says whether an operand exists. Getting
 it wrong desynchronises every following command in the file, which is why it is
 one of the first things a decoder has to get right.
 
-### 6.2 Low bits as payload gates
+### 1.2 Low bits as payload gates
 
 Several handlers use the low argument bits to say which optional operands
 follow, in a fixed order. `Command_1c` is a compact example: bit `0` gates a
 context value, bit `1` a stand-position id, and bits `2` and `3` position and
 posture vectors.
 
-### 6.3 Operands masked before the engine sees them
+### 1.3 Operands masked before the engine sees them
 
 Some argument bits are read in the delay slot of a branch, meaning they take
 effect regardless of which way the branch goes. `Command_06`, `Command_40` and
@@ -44,7 +44,7 @@ effect regardless of which way the branch goes. `Command_06`, `Command_40` and
 the engine ever sees it <Tag kind="confirmed" />. A decoder must preserve those
 high bits to round-trip, but they cannot change behaviour.
 
-## 7. Character operands
+## 2. Character operands
 
 A character operand is a 32-bit selector word:
 
@@ -59,7 +59,7 @@ The low 16 bits are the id. Byte 2 is a secondary class/variant input passed
 alongside the id. Values below `0x26AC` are literal character ids, and `0` means
 "the script's default character".
 
-### 7.1 Abstraction codes
+### 2.1 Abstraction codes
 
 Values from `0x26AC` up are **abstraction codes** resolved at run time, and must
 not be looked up in a character table. Two functions do the resolving:
@@ -94,7 +94,7 @@ The slot run is five wide, ending at `0x26B1`. Slots 2–4 share an identical
 count, which is what a uniform slot series looks like; slot 1 and slot 5 differ
 because the first is normally the player and the last is often unfilled.
 
-### 7.2 The `0x26E1` block
+### 2.2 The `0x26E1` block
 
 This block is worth understanding because it is heavily used. The handler reads
 `SCR_DATA + 0x34 + 4N`, and `SetEventValueForScript` maps event value ids
@@ -105,11 +105,11 @@ This block is worth understanding because it is heavily used. The handler reads
 entire game, behind only "current character": scripts stash a character in value
 1009 and then act on it.
 
-## 8. Values and flags
+## 3. Values and flags
 
 Three distinct stores of state are addressable from a script.
 
-### 8.1 Config / event flags
+### 3.1 Config / event flags
 
 A large array of boolean flags read and written through
 `CRadiApp::GetConfigEventFlag` and `SetConfigEventFlag`. Ids run to at least
@@ -117,7 +117,7 @@ A large array of boolean flags read and written through
 the bits of a small integer, LSB first — so a single operand can carry a small
 number spread across several flag ids.
 
-### 8.2 Event values
+### 3.2 Event values
 
 32-bit script variables. Ids `1000`–`1009` are **script-local**, stored in the
 running script's own `SCR_DATA` block at `+0x34 + 4N`
@@ -127,7 +127,7 @@ array.
 This is why 1000–1009 appear constantly — they are scratch registers, and a
 sibling script does not see them.
 
-### 8.3 Character properties
+### 3.3 Character properties
 
 Reached through per-domain dispatch tables of property accessor functions,
 recovered by emulating the static initialisers <Tag kind="confirmed" />:
@@ -142,7 +142,7 @@ They cover HP, EXP, money, status and so on. Character entries 4, 5 and 73 all
 point at the same stub (`0x002A0FD0`), so those property codes are unused —
 which is a useful validity check on any decoded operand.
 
-### 8.4 Property `0x1D`: storage the game never reads
+### 3.4 Property `0x1D`: storage the game never reads
 
 One property is worth calling out because it is not engine state at all.
 
@@ -170,11 +170,23 @@ general-purpose per-character storage rather than a piece of engine state with a
 hidden meaning. Neighbouring bytes `+0x7C` and `+0x80` have their own property
 codes and the same shape, but no script in the corpus uses them.
 
-## 9. Symbol coverage
+## 4. Symbol coverage
 
-Id-to-name tables covering 1,859 names exist across the character, item,
-location, BGM, skill, event and flag domains. Ids remain authoritative — a name
-is a convenience, not part of the format.
+Id-to-name tables cover **2,423 id-to-name entries** across seven domains. Ids
+remain authoritative — a name is a convenience, not part of the format.
+
+| Domain | Entries |
+|---|---:|
+| character | 382 |
+| item | 671 |
+| location | 886 |
+| BGM | 133 |
+| skill | 39 |
+| event | 137 |
+| flag | 175 |
+| **Total** | **2,423** |
+
+That figure counts entries, not globally unique display strings.
 
 Spot checks against ids taken from the corpus: character `0x0001` Jack, `0x0042`
 Miranda, `0x00D3` Monki; BGM `0x0037` Gratifying Guest; location `0x001F`

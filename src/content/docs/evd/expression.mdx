@@ -4,14 +4,14 @@ description: >-
   Opcode 0x14 in full — the eight operations, the typed operand descriptors,
   and the proven read and write layouts for each operand type.
 sidebar:
-  label: 11 · Expression command
+  label: Expression command
   order: 4
 ---
 
 import Tag from '../../../components/Tag.astro';
 
 Opcode [`0x14`](../commands/14/) is by far the most-used command in the game:
-**46,311 of the 386,348 command lines** in the loose event corpus, about 12%.
+**46,347 of the 386,348 command records** in the loose event corpus, about 12%.
 
 It is a general read-modify-write across most mutable script state. About 90% of
 uses are a plain copy.
@@ -139,7 +139,7 @@ Character entries 4, 5 and 73 all point at the same stub (`0x002A0FD0`), so
 those property codes are unused — a useful validity check on any decoded
 operand.
 
-See also [property `0x1D`](../operands/#84-property-0x1d-storage-the-game-never-reads),
+See also [property `0x1D`](../operands/#34-property-0x1d-storage-the-game-never-reads),
 which scripts use as general-purpose per-character storage the engine never
 reads.
 

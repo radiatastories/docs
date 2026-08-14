@@ -4,7 +4,7 @@ description: >-
   Branches, the 20-handler condition table and its payload layouts, marker
   seeks, and the 0xF0 marker family.
 sidebar:
-  label: 10 · Control flow
+  label: Control flow
   order: 3
 ---
 
@@ -162,6 +162,25 @@ compared against.
 | `0F` | global config word direct | Direct compare against a global config word at `0x003B2820`, with masking behaviour for zero and `0x8000` cases. |
 | `10` | script or character state direct | Byte 3 of `word0` is the state selector; byte 2 plus the low halfword form the character abstraction. |
 
+### 2.4 Bases used but not yet decoded
+
+All 20 handlers `CheckCondition_00`–`CheckCondition_19` are installed, and five
+more bases occur in shipped scripts without their payloads having been
+established. They are listed here rather than omitted, because a reader who
+finds one in real data would otherwise assume it is invalid:
+
+| Base | Status |
+|---|---|
+| `06` | Used, heavily. Payload role not established. |
+| `09` | Used, heavily. Payload role not established. |
+| `11` | Used. Payload role not established. |
+| `12` | Used. Payload role not established. |
+| `13` | Used. Payload role not established. |
+
+For all five, the two payload words are read and preserved verbatim, and the
+inversion bit and comparison protocol above still apply — only the handler's
+interpretation of the payload is unknown.
+
 The names for the branchier character conditions are deliberately conservative:
 the MIPS proves the data sources, calls and direct/compare behaviour, but some
 property meanings still need call-site evidence before they can be named
@@ -207,19 +226,32 @@ word itself:
 `2` and `7`**. Every other mode falls through and returns without acting, which
 is exactly what makes them usable as inert in-stream markers.
 
-| Mode | Meaning |
-|---:|---|
-| `0` | A labelled point. Does nothing when executed; the marker table points at it and marker seeks jump to it. |
-| `2` | Calls `CCharacterPerson::SetSchedulePercent` with the 20-bit value. |
-| `3` | An animation frame trigger. Inert to the script stepper, but `CCharacterAnim::ChangeFrame_sub` (`0x002A4A20`) walks the marker table and fires the commands at this marker when the playing animation reaches the signed 20-bit frame in bits 8–27. |
-| `7` | Sets a status bit in `SCR_DATA`. The value `0xF00000F0` is the end-of-animation-script sentinel — frame infinity. |
+The counts below are marker-table targets **whose first word is opcode `0xF0`**,
+which is why mode `2` does not appear: it is used inline in the command stream
+rather than being pointed at by a table.
+
+:::note[A marker target is not guaranteed to be a marker]
+Across the corpus the tables hold 19,181 valid targets, of which 19,180 are
+`0xF0` words. The exception is `2488_k18_k0_k1.evd`, whose only marker entry
+points at offset `0xF4`, where the word is `0x80010417` — opcode `0x17`, an
+ordinary command. Nothing in `GetMarkerAddress` requires the target to be a
+marker, so a reader must not assume it.
+:::
+
+| Mode | In marker tables | Meaning |
+|---:|---:|---|
+| `0` | 7,033 | A labelled point. Does nothing when executed; the marker table points at it and marker seeks jump to it. |
+| `1` | 105 | Observed in marker tables, but the handler gives it no action, so it is inert to the script stepper. Meaning not established. |
+| `2` | — | Calls `CCharacterPerson::SetSchedulePercent` with the 20-bit value. |
+| `3` | 9,450 | An animation frame trigger. Inert to the script stepper, but `CCharacterAnim::ChangeFrame_sub` (`0x002A4A20`) walks the marker table and fires the commands at this marker when the playing animation reaches the signed 20-bit frame in bits 8–27. |
+| `7` | 2,592 | Sets a status bit in `SCR_DATA`. The value `0xF00000F0` is the end-of-animation-script sentinel — frame infinity. |
 
 ### 4.1 Mode 0's value is not the marker index
 
-Across 339 files with marker tables, only 131 have a constant offset between the
-20-bit value and the table index, and **208 are internally inconsistent within a
-single file**. The value is an author's label, not the index
-<Tag kind="inferred" />.
+Of the **339 files that contain mode-0 markers** — not all 2,797 files with a
+marker table — only 131 have a constant offset between the 20-bit value and the
+table index, and **208 are internally inconsistent within a single file**. The
+value is an author's label, not the index <Tag kind="inferred" />.
 
 ### 4.2 Animation scripts are marker lists
 

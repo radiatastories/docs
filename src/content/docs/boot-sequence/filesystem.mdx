@@ -13,7 +13,7 @@ import Tag from '../../../components/Tag.astro';
 ## 7. MakeFileSystem: TOC address derivation, read, and descramble
 
 <Tag kind="confirmed" />, cross-validated against working reference code, the
-boot log, and used in a custom disk rebuild proof-of-concept. The `0x00078D83`
+boot log, and used in a custom disk rebuild. The `0x00078D83`
 constant is a hardcoded reference to the TOC address.
 
 ### 7.1 Gate and disc read
@@ -22,17 +22,17 @@ constant is a hardcoded reference to the TOC address.
 if storage[+0xD99B] != 0:
     return SUCCESS
 
-sceCdDiskReady(0)
-CStorage::Open(storage, index=0)      ; -> SIF SearchFile
+Prepare Sif call
+IF SearchFile
 buf = operator_new(0xD800)
-CStorage::Read(storage, buf, size=0xD800)
+Read buf
 ```
 
 <Tag kind="confirmed" /> — this read is issued as a raw/extended `DvdRead` (not
 the standard `CDRead` used for the ELF), in `2064`-byte blocks rather than
 `2048`:
 
-```asm
+```
 DvdRead: Reading Sector 0494979 (002 Blocks of Size 2064) at Speed=4x(CAV) SpindleCtrl=83
 ```
 

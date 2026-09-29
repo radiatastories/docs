@@ -232,13 +232,6 @@ C[i] = ((D[i] XOR K[i & 0xF]) + m(i)) & 0xFF
 The key index (`i & 0xF`) and the `m(i)` counter (`+3` per byte, running across the *entire* buffer) cycle independently, realigning only every `16 * 256 / gcd(16, 256) = 256` bytes.
 :::
 
-<SourceBox>
-  <code>CBios</code>,
-  <code>CDecompress</code>,
-  <code>CSplitDecompress</code>,
-  <code>DecodeKeyMain</code>
-</SourceBox>
-
 ## Kods
 
 Kods doesn't store file sizes. It stores a table of **boundaries** (offsets). A segment of payload data is whatever lies *between* two of them. Parsing Kods is less "read a table of files" and more "read a table of cut points, then read off what's between subsequent pairs of them."
@@ -410,12 +403,3 @@ broken:     A A B A A A A A A B
 :::note
 Since slots can share the same segment, datacenter headers don't use sentinel slots. If a datacenter headers needs to communicate that the slot is empty it sets the slot to the previous slot's value. 
 :::
-
-<SourceBox>
-  <code>Rel2AbsKodsAddr</code>,
-  <code>GetKodsDataOffset</code>,
-  <code>GetKodsIndexFromAlias</code>,
-  <code>GetKodsDataAlias</code>,
-  <code>GetKodsAddress</code>,
-  <code>CRadiDatacenter</code> 
-</SourceBox>

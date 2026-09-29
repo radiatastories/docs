@@ -20,37 +20,35 @@ understood to belong to the first pass are noted explicitly.
 ### 4.1 Prologue and boot markers
 
 - Standard N32 stack frame; saves `ra` and `s0`–`s7`.
-- `FullAllocAndFree(a0)` runs immediately. <Tag kind="inferred" /> heap
-  sanity/defrag pass.
+- <Tag kind="inferred" /> heap
+  sanity/defrag pass taking a0 as an argument.
 - An 8-byte magic value written to `0x01FE0000` — a boot-progress marker.
 - EE Timer 0's MODE register (`0x10000010`) set to `0x83`. Reused later as an RNG
   seed source.
 
 ### 4.2 Core SDK bring-up
 
-```asm
-mwInit()
-sceSifInitRpc()
-sceCdInit()
+```
+core init
 ```
 
-Followed by the **IOP kernel reboot** — `sceSifRebootIop` with two fixed string
+Followed by the **IOP kernel reboot** with two fixed string
 literals (the kernel's path and args), confirmed via boot log to load a distinct
 ROM-style image ([§6](../kernel-image/#6-custom-kernel-image-and-elfs)) located
-immediately after `main` on disc. `sceSifSyncIop` waits for completion; RPC and
+immediately after `main` on disc. RPC waits for completion then
 filesystem drivers are re-initialized since IOP-side state resets across the
-reboot. Thread priority is raised via `ChangeThreadPriority(tid, 0x2D)`.
+reboot. Thread priority is raised via ps2 SDK `ChangeThreadPriority(tid, 0x2D)`.
 
 <Tag kind="inferred" /> — this reboot very likely triggers the full EE-side reset
 from [§3](../disc-and-chain/#3-boot-chain-two-executions-of-main), i.e. this is
 the *end* of the first-pass execution of `main`, not a mid-sequence step within
 one continuous run.
 
-### 4.3 CStorage::Open and SIF RPC system server IDs
+### 4.3 Storage and SIF RPC system server IDs
 
-<Tag kind="confirmed" /> — `CStorage::Open`'s small integer parameter (e.g. `0`,
+<Tag kind="confirmed" /> calls to the DVD are made with a small integer parameter (e.g. `0`,
 `1`, `2` as seen at various call sites) is **not** itself a raw SIF System Server
-ID. It is `CStorage::Open`'s own internal index, which it translates to one of
+ID. It is the virtual filesystem's own internal index, which it translates to one of
 the standard PS2 SDK SIF RPC System Server IDs before issuing the actual RPC.
 
 <Tag kind="inferred" /> — this table is inferred from standard documentation
@@ -77,14 +75,11 @@ IDs may differ from the standard PS2 SDK values.
 ### 4.4 Engine (CBios) bring-up
 
 ```asm
-CBios::GetStorage()      -> CStorage::StorageInit()
-CBios::GetStorage()      -> CStorage::MakeFileSystem()   ; see section 7
-CBios::GetDecompress()                                   ; handle reused throughout boot
-CSif::Init()
+filesystem_bring_up()
 ```
 
 RNG seeding: a live EE Timer0 COUNT register read, multiplied by a fixed
-constant, `0xCAD` added, and the result seeds `InitRandom()`.
+constant, `0xCAD` added, and the result seeds the random number generator.
 <Tag kind="confirmed" />, fully reproducible.
 
 ### 4.5 Conditional gate: the shared flag byte
@@ -108,62 +103,52 @@ Gated by the flag in [§4.5](#45-conditional-gate-the-shared-flag-byte).
 `PADMAN`, `MCSERV`, `CDVDFSV`… see `IOPRP300.IMG`) are already active by this
 point, provided by the kernel image from the first pass
 ([§4.2](#42-core-sdk-bring-up)). This loop's 12 modules are **game-specific** IOP
-modules, loaded via a `CStorage::Open`/`Read` from the first TOC entry, proven
+modules, loaded from the first TOC entry, proven
 from disk read logs.
 
 Loop mechanics:
 
-1. Buffer read and decompressed via `CDecompress::Decode`.
+1. Buffer read and decompressed buffer
 2. DMA'd into IOP heap memory.
 3. **12 modules** loaded in a loop (indices 0–11):
-   - Indices **8 and 9** are special-cased: `sceSifLoadStartModuleBuffer` with
+   - Indices **8 and 9** are special-cased  with
      argument strings from a fixed string table (likely driver args —
      <Tag kind="inferred" />).
-   - All other indices: `sceSifLoadModuleBuffer`.
+   - All other indices load normally.
 
 ### 4.7 Region setup, graphics, task init
 
-- `CStorage::InitHdd`, `std::set_new_handler`, `sceDmaReset`.
+- Storage handle init
 - PAL/NTSC branch, GS display parameters per region.
-- `CPSTask::InitTask` — the main task/scheduler object.
-- 16 iterations of `CPSTask::GsSyncPath`.
+- main task/scheduler object.
+- 16 iterations the graphics task object.
 
 ### 4.8 Sound init
 
 Same gate as [§4.5](#45-conditional-gate-the-shared-flag-byte).
 
-```asm
-CSoundManager::InitSoundManager()
-CSoundManager::InitSoundMemory(...)
-CSoundManager::InitMusicList(...)
-CVoiceManager::SetVoiceTable(...)
-CSoundManager::InitKeepSE(...)   ; conditional on a second flag
+```
+initialisation for sounds, music, and voices
+one initialisation gated behind a second flag
 ```
 
-### 4.9 Secret key and checksum pass
+### 4.9 EE->Sif entropy
 
-`CSound::GetSecretKeyCode` fills a buffer, which is processed by a **VU0
-microprogram**, combined with `CStorage::ReadClock`, summed into a byte, and used
-as a loop bound to burn additional `Random()` calls. <Tag kind="inferred" />:
-entropy mixing, not a hard integrity gate.
+EE→Sif obtains entropy-related data through a SIF request and passes the returned buffer into the immediately following entropy-mixing sequence, where it is combined with a clock-derived value and processed by VU0 before being reduced to a byte. That byte controls additional Random() calls. <Tag kind="inferred" />: interpreted as entropy mixing rather than a hard integrity gate.
 
 ### 4.10 Overlay segment loader: hand-off to segment 1 (Step0 00)
 
 ```asm
-index = 1
-loop:
-    header = CDecompress::GetCompHeader(decompress_handle, buffer2, index)
-    if header == NULL: break
-    CBios::DecompressProgramOnly(decompress_handle, header, ...)
-    index += 1
-
-CBios::DecompressAndExec(decompress_handle, buffer2, index=1)   ; hardcoded
+loop
+    get sle header
+    if header == NULL break
+    decompress_and_load(buffer1, buffer2)
 ```
 
 <Tag kind="confirmed" /> — `buffer2` holds a concatenated table of compressed
-segments. `GetCompHeader` is 1-based and returns `NULL` past the last segment;
-every segment from index 1 upward is pre-staged via `DecompressProgramOnly`; once
-exhausted, `DecompressAndExec` transfers execution permanently into segment 1.
+segments. "get sle header" is 1-based and returns `NULL` past the last segment;
+every segment from index 1 upward is pre-staged from the load stage; once
+exhausted, load transfers execution permanently into segment 1.
 Code after this point is very likely dead.
 
 <Tag kind="inferred" /> — segment 1 almost certainly contains the runtime
